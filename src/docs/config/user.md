@@ -97,6 +97,8 @@ Default bindings in `tasks`:
   desc: move-task-up, move-task-down, beside the tasks of its group
 - cmd: <y>
   desc: copy-task-command
+- cmd: <c>
+  desc: clear-output, the task's screen and scrollback
 - cmd: <p>
   desc: show-commands-menu
 - cmd: <P>

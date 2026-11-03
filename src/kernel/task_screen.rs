@@ -149,6 +149,8 @@ pub enum TaskScreenCmd {
     unit: ScrollUnit,
   },
   CopyYank,
+  /// Blank the screen and its history; the program keeps running.
+  ClearOutput,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -518,6 +520,7 @@ impl TaskScreen {
       TaskScreenCmd::CopyBeginSelection => self.copy_begin_selection(),
       TaskScreenCmd::Scroll { delta, unit } => self.scroll(delta, unit),
       TaskScreenCmd::CopyYank => self.copy_yank(),
+      TaskScreenCmd::ClearOutput => self.clear_output(),
     }
     self.settle(effects);
   }
@@ -583,6 +586,13 @@ impl TaskScreen {
       present_handle: present_handle.clone(),
     });
     Some(present_handle)
+  }
+
+  fn clear_output(&mut self) {
+    // The frozen copy-mode snapshot would still show what is cleared.
+    self.leave_copy();
+    self.screen.clear_output();
+    self.render();
   }
 
   fn leave_copy(&mut self) {

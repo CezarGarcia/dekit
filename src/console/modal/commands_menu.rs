@@ -204,6 +204,7 @@ fn menu_items() -> Vec<MenuItem> {
     Action::MoveTaskUp,
     Action::MoveTaskDown,
     Action::CopyTaskCommand,
+    Action::ClearOutput,
     Action::ShowReload,
     Action::ShowWriteBack,
     Action::SaveToConfig,

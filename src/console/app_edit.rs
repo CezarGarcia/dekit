@@ -399,6 +399,7 @@ impl App {
           item("Edit…", Action::ShowEditTask).separated(),
           item("Duplicate…", Action::ShowDuplicateTask),
           item("Copy command", Action::CopyTaskCommand),
+          item("Clear output", Action::ClearOutput),
           item("Move up", Action::MoveTaskUp),
           item("Move down", Action::MoveTaskDown),
           item("Zoom", Action::Zoom).separated(),

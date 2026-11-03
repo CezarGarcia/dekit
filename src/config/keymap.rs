@@ -143,6 +143,7 @@ impl KeymapConfig {
     s.keymap_add_p(KeyCode::Char('K').into(), Action::MoveTaskUp);
     s.keymap_add_p(KeyCode::Char('J').into(), Action::MoveTaskDown);
     s.keymap_add_p(KeyCode::Char('y').into(), Action::CopyTaskCommand);
+    s.keymap_add_p(KeyCode::Char('c').into(), Action::ClearOutput);
     s.keymap_add_p(
       Key::new(KeyCode::Char('d'), KeyMods::NONE),
       Action::ShowRemoveTask,

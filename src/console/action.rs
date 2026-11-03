@@ -124,6 +124,9 @@ pub enum Action {
   },
   CopyModeEnd,
   CopyModeCopy,
+  /// Blank the current task's output and scrollback without restarting
+  /// it.
+  ClearOutput,
   ToggleKeymapWindow,
   /// Dark or light; bound only in debug builds until themes settle.
   ToggleTheme,
@@ -215,6 +218,7 @@ impl Action {
       }
       Action::CopyModeEnd => "Select end position".to_string(),
       Action::CopyModeCopy => "Copy selected text".to_string(),
+      Action::ClearOutput => "Clear output".to_string(),
       Action::ToggleKeymapWindow => "Toggle help".to_string(),
       Action::ToggleTheme => "Toggle dark/light theme".to_string(),
       Action::SendKey { key } => format!("Send {} key", key.spec()),

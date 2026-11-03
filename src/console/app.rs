@@ -527,7 +527,8 @@ impl App {
       | TaskScreenCmd::CopyMove { .. }
       | TaskScreenCmd::CopyBeginSelection
       | TaskScreenCmd::Scroll { .. }
-      | TaskScreenCmd::CopyYank => return,
+      | TaskScreenCmd::CopyYank
+      | TaskScreenCmd::ClearOutput => return,
     };
     self.with_screen(|screen, effects| screen.handle_cmd(cmd, effects));
   }
@@ -924,6 +925,9 @@ impl App {
       ),
       Action::CopyModeEnd => {
         self.send_current(current, TaskScreenCmd::CopyBeginSelection)
+      }
+      Action::ClearOutput => {
+        self.send_current(current, TaskScreenCmd::ClearOutput)
       }
       Action::CopyModeCopy => {
         self.send_current(current, TaskScreenCmd::CopyYank)

@@ -202,6 +202,16 @@ impl Screen {
     };
   }
 
+  /// Blanks the main screen and drops its history, as `clear` does in a
+  /// shell, with the cursor home. A program on the alternate screen keeps
+  /// what it drew there.
+  pub fn clear_output(&mut self) {
+    let style = self.grid.intern_style(Style::DEFAULT);
+    self.grid.erase_all(style);
+    self.grid.clear_history();
+    self.grid.set_pos(Pos::default());
+  }
+
   /// DECSTR: a soft reset of modes, margins, and styles; the screen's
   /// contents stay.
   fn soft_reset(&mut self) {
