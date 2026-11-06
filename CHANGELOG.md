@@ -1,5 +1,11 @@
 ## Unreleased
 
+- This fork installs and updates from github.com/CezarGarcia/dekit: the
+  install scripts and `dekit update` default to its releases, and every
+  push to `master` publishes the `canary` release as the latest. A tag
+  makes a GitHub release only; crates.io, npm, and PyPI stay the
+  original's
+
 - The console finds text in a task's output: `<C-f>`, or `/` in the task
   list or copy mode, opens a find bar on the terminal. Matches in the
   screen and its scrollback are highlighted as you type, the newest

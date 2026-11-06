@@ -56,6 +56,8 @@ jobs:
   # The checks below run before anything is published and must pass.
   check-crate:
     needs: meta
+    # crates.io, npm and PyPI belong to the original repository.
+    if: github.repository == 'pvolok/dekit'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -81,6 +83,8 @@ jobs:
 
   check-npm:
     needs: [meta, build]
+    # crates.io, npm and PyPI belong to the original repository.
+    if: github.repository == 'pvolok/dekit'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -122,6 +126,8 @@ jobs:
   # only the wheels themselves are checked.
   check-pypi:
     needs: [meta, build]
+    # crates.io, npm and PyPI belong to the original repository.
+    if: github.repository == 'pvolok/dekit'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -152,6 +158,8 @@ jobs:
 
   github-release:
     needs: [meta, build, check-crate, check-npm, check-pypi]
+    # The checks are skipped outside the original repository.
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -194,6 +202,8 @@ jobs:
 
   publish-crate:
     needs: [meta, github-release]
+    # crates.io, npm and PyPI belong to the original repository.
+    if: github.repository == 'pvolok/dekit'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -227,6 +237,8 @@ jobs:
 
   publish-npm:
     needs: [meta, github-release]
+    # crates.io, npm and PyPI belong to the original repository.
+    if: github.repository == 'pvolok/dekit'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -263,6 +275,8 @@ jobs:
   # environment, so no token is stored.
   publish-pypi:
     needs: [meta, github-release]
+    # crates.io, npm and PyPI belong to the original repository.
+    if: github.repository == 'pvolok/dekit'
     runs-on: ubuntu-latest
     environment:
       name: pypi

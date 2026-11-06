@@ -7,6 +7,11 @@
   <a href="https://x.com/pavelvolok"><img src="https://img.shields.io/badge/follow-%40pavelvolok-black?logo=x" alt="Follow @pavelvolok on X" /></a>
 </p>
 
+> **This is a fork of [dekit](https://github.com/pvolok/dekit).** It adds
+> finding text in a task's output: `Ctrl+F` in the terminal UI. It installs
+> and updates from this repository's releases: every push to `master`
+> builds them.
+
 **dekit is a process manager.** It runs your project's tasks, such as servers,
 databases and workers, in development and in production.
 
@@ -23,26 +28,18 @@ databases and workers, in development and in production.
 macOS, Linux:
 
 ```sh
-curl -fsSL https://dekit.run/install.sh | sh
+curl -fsSL https://github.com/CezarGarcia/dekit/releases/latest/download/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://dekit.run/install.ps1 | iex
+irm https://github.com/CezarGarcia/dekit/releases/latest/download/install.ps1 | iex
 ```
 
-npm:
-
-```sh
-npm install -g @dekit/cli
-```
-
-PyPI:
-
-```sh
-pip install dekit-cli
-```
+`dekit update` then updates it from this repository. npm
+(`@dekit/cli`), PyPI (`dekit-cli`), and dekit.run install the original
+dekit, without this fork's changes.
 
 ## Quick start
 

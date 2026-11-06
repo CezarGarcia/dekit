@@ -3,7 +3,7 @@
 #
 #   DEKIT_VERSION       latest (default), canary, or a version like 1.2.3
 #   DEKIT_INSTALL_DIR   where the binary goes (default: ~/.local/bin)
-#   DEKIT_RELEASES_URL  a mirror of https://github.com/pvolok/dekit/releases
+#   DEKIT_RELEASES_URL  a mirror of https://github.com/CezarGarcia/dekit/releases
 set -eu
 
 err() {
@@ -38,7 +38,7 @@ sha256() {
 # Everything runs from main, called on the last line, so a download that
 # was cut off runs nothing.
 main() {
-  releases=${DEKIT_RELEASES_URL:-https://github.com/pvolok/dekit/releases}
+  releases=${DEKIT_RELEASES_URL:-https://github.com/CezarGarcia/dekit/releases}
   version=${DEKIT_VERSION:-latest}
   install_dir=${DEKIT_INSTALL_DIR:-"$HOME/.local/bin"}
 

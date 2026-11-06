@@ -9,7 +9,7 @@ set -eu
 
 from=$1
 to=$2
-releases=${DEKIT_RELEASES_URL:-https://github.com/pvolok/dekit/releases}
+releases=${DEKIT_RELEASES_URL:-https://github.com/CezarGarcia/dekit/releases}
 
 release_url() {
   case "$1" in

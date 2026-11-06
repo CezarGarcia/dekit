@@ -15,10 +15,19 @@ use anyhow::{Context, bail};
 
 use crate::runner::user_data_dir;
 
+/// Where this fork publishes its builds: the install scripts and the
+/// binaries they download. `latest` is the newest build of master.
+macro_rules! releases_url {
+  () => {
+    "https://github.com/CezarGarcia/dekit/releases"
+  };
+}
+const RELEASES_URL: &str = releases_url!();
+
 const INSTALL_URL: &str = if cfg!(windows) {
-  "https://dekit.run/install.ps1"
+  concat!(releases_url!(), "/latest/download/install.ps1")
 } else {
-  "https://dekit.run/install.sh"
+  concat!(releases_url!(), "/latest/download/install.sh")
 };
 
 pub fn update(version: Option<&str>, json: bool) -> anyhow::Result<()> {
@@ -26,7 +35,7 @@ pub fn update(version: Option<&str>, json: bool) -> anyhow::Result<()> {
   let exe = dunce::canonicalize(std::env::current_exe()?)?;
   if !installed_by_script(&exe) {
     bail!(
-      "this dekit was not installed by the install script (https://dekit.run); update it the way you installed it, then run `dekit runner upgrade --all`"
+      "this dekit was not installed by the install script ({RELEASES_URL}); update it the way you installed it, then run `dekit runner upgrade --all`"
     );
   }
   let version = version.unwrap_or("latest");
@@ -89,6 +98,10 @@ fn run_installer(exe: &Path, version: &str, out: Stdio) -> anyhow::Result<()> {
     .env("DEKIT_INSTALL_DIR", dir)
     .env("DEKIT_VERSION", version)
     .stdout(out);
+  // The binaries come from where the script does, whatever its default.
+  if std::env::var_os("DEKIT_RELEASES_URL").is_none() {
+    installer.env("DEKIT_RELEASES_URL", RELEASES_URL);
+  }
 
   #[cfg(unix)]
   let status = {

@@ -5,35 +5,27 @@ related: [start/targets, cli/up, config]
 order: 10
 ---
 
-Install with the script:
+This dekit is a fork of github.com/pvolok/dekit, installed from
+github.com/CezarGarcia/dekit. Install with the script:
 
 ```sh
-curl -fsSL https://dekit.run/install.sh | sh
+curl -fsSL https://github.com/CezarGarcia/dekit/releases/latest/download/install.sh | sh
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-irm https://dekit.run/install.ps1 | iex
+irm https://github.com/CezarGarcia/dekit/releases/latest/download/install.ps1 | iex
 ```
 
 The scripts put `dekit` in `~/.local/bin`; `DEKIT_INSTALL_DIR` picks
-another directory. `DEKIT_VERSION` installs a given version, such as
-`1.2.3`, or `canary` for the latest build of the main branch.
-
-Or from npm or PyPI:
-
-```sh
-npm install -g @dekit/cli
-```
-
-```sh
-pip install dekit-cli
-```
+another directory. The latest release is the newest build of `master`,
+also called `canary`; `DEKIT_VERSION` installs a tagged one, such as
+`1.2.3`.
 
 `dekit update` brings a dekit from the script and its running runners to
-the latest version (|cli/update|). Update an npm or PyPI install with
-`npm` or `pip`, then run |cli/runner/upgrade| with `--all`.
+the latest version (|cli/update|). npm (`@dekit/cli`) and PyPI
+(`dekit-cli`) have the original dekit, without this fork's changes.
 
 ## A first project
 

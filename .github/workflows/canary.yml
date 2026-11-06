@@ -37,26 +37,32 @@ jobs:
       - name: Add installers and checksums
         run: packaging/bundle.sh out
 
-      - name: Force-update the canary prerelease
+      # The fork's only release: marked latest, so the install scripts and
+      # `dekit update` get it with no version given.
+      - name: Force-update the canary release
         run: |
           gh release delete canary --cleanup-tag --yes || true
           gh release create canary out/* \
             --title "Latest master (canary)" \
-            --notes "Rolling build of the latest master commit (${GITHUB_SHA}). Updated on every push to master. Prerelease; not a stable release." \
-            --prerelease \
+            --notes "Rolling build of the latest master commit (${GITHUB_SHA}). Updated on every push to master." \
+            --latest \
             --target "${GITHUB_SHA}"
 
   # An installed dekit must always be able to update to what master holds.
-  # `from` lists the release tags to update from: add the first release
-  # (and keep it) once it exists.
+  # `from` lists the release tags of this repository to update from. macOS
+  # is left out: its jobs wait in the queue for a runner here, and it
+  # updates with the same install.sh as Linux.
   update-test:
     needs: publish
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
-        from: [canary, v0.10.0]
+        os: [ubuntu-latest, windows-latest]
+        from: [canary]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      DEKIT_RELEASES_URL: https://github.com/${{ github.repository }}/releases
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +77,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $Releases = "https://github.com/pvolok/dekit/releases/download"
+          $Releases = "https://github.com/${{ github.repository }}/releases/download"
           $Dir = Join-Path $env:RUNNER_TEMP "dk"
           $env:DEKIT_INSTALL_DIR = Join-Path $Dir "bin"
           New-Item -ItemType Directory (Join-Path $Dir "project") | Out-Null

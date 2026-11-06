@@ -2,7 +2,7 @@
 #
 #   DEKIT_VERSION       latest (default), canary, or a version like 1.2.3
 #   DEKIT_INSTALL_DIR   where dekit.exe goes (default: ~\.local\bin)
-#   DEKIT_RELEASES_URL  a mirror of https://github.com/pvolok/dekit/releases
+#   DEKIT_RELEASES_URL  a mirror of https://github.com/CezarGarcia/dekit/releases
 
 # The block keeps these settings out of the session that ran `irm | iex`.
 & {
@@ -10,7 +10,7 @@
     $ProgressPreference = "SilentlyContinue"
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $Releases = if ($env:DEKIT_RELEASES_URL) { $env:DEKIT_RELEASES_URL } else { "https://github.com/pvolok/dekit/releases" }
+    $Releases = if ($env:DEKIT_RELEASES_URL) { $env:DEKIT_RELEASES_URL } else { "https://github.com/CezarGarcia/dekit/releases" }
     $Version = if ($env:DEKIT_VERSION) { $env:DEKIT_VERSION } else { "latest" }
     $InstallDir = if ($env:DEKIT_INSTALL_DIR) { $env:DEKIT_INSTALL_DIR } else { Join-Path $HOME ".local\bin" }
 

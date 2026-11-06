@@ -17,7 +17,8 @@ listed and left alone. Running `update` again when nothing is new changes
 nothing.
 
 A version installs that release instead of the latest, which is also the
-way back from a bad one. `canary` is the latest build of the main branch.
+way back from a bad one. Releases come from github.com/CezarGarcia/dekit,
+where the latest is the newest build of `master`, also called `canary`.
 
 :::callout note title="Windows"
 Runners keep their version until they restart: |cli/down|, then |cli/up|.
