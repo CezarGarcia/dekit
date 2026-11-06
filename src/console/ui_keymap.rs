@@ -21,6 +21,30 @@ pub fn render_keymap(
 
   let style = theme.block.panel(false);
   let mut line = style.draw(grid, area).title(" Help ", style.title).inner();
+  let mut hint = |key: &str, desc: &str| {
+    for (text, attrs) in [
+      (" <", style.dim),
+      (key, style.key),
+      (": ", style.dim),
+      (desc, style.text),
+      ("> ", style.dim),
+    ] {
+      grid.draw_text(line.take_left(text.width() as u16), text, attrs);
+    }
+  };
+
+  // The find bar takes the keys while it is open.
+  if state.search.is_some() {
+    for (key, desc) in [
+      ("Enter", "Next match up"),
+      ("S-Enter", "Next match down"),
+      ("Up/Down", "Next match up/down"),
+      ("Esc", "Close search"),
+    ] {
+      hint(key, desc);
+    }
+    return;
+  }
 
   let group = state.keymap_group();
   let items: &[Action] = match group {
@@ -32,6 +56,7 @@ pub fn render_keymap(
       Action::StartTask,
       Action::StopTask,
       Action::RestartTask,
+      Action::Search,
       Action::Zoom,
       Action::ShowCommandsMenu,
       Action::ShowRunnerSelect {
@@ -39,10 +64,12 @@ pub fn render_keymap(
       },
       Action::ToggleKeymapWindow,
     ],
-    KeymapGroup::Term => &[Action::ToggleFocus],
+    KeymapGroup::Term => &[Action::ToggleFocus, Action::Search],
     KeymapGroup::Copy => &[
       Action::CopyModeEnd,
       Action::CopyModeCopy,
+      Action::Search,
+      Action::SearchNext,
       Action::CopyModeLeave,
     ],
   };
@@ -51,14 +78,6 @@ pub fn render_keymap(
     let Some(key) = keymap.key(group, action) else {
       continue;
     };
-    for (text, attrs) in [
-      (" <".to_string(), style.dim),
-      (key.to_string(), style.key),
-      (": ".to_string(), style.dim),
-      (action.desc(), style.text),
-      ("> ".to_string(), style.dim),
-    ] {
-      grid.draw_text(line.take_left(text.width() as u16), &text, attrs);
-    }
+    hint(&key.to_string(), &action.desc());
   }
 }

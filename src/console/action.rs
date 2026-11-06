@@ -124,6 +124,13 @@ pub enum Action {
   },
   CopyModeEnd,
   CopyModeCopy,
+  /// Open the find bar: what is typed is looked for in the current
+  /// task's output and scrollback, in copy mode.
+  Search,
+  /// The next match up, in older output.
+  SearchNext,
+  /// The next match down, in newer output.
+  SearchPrev,
   /// Blank the current task's output and scrollback without restarting
   /// it.
   ClearOutput,
@@ -218,6 +225,9 @@ impl Action {
       }
       Action::CopyModeEnd => "Select end position".to_string(),
       Action::CopyModeCopy => "Copy selected text".to_string(),
+      Action::Search => "Find".to_string(),
+      Action::SearchNext => "Next match up".to_string(),
+      Action::SearchPrev => "Next match down".to_string(),
       Action::ClearOutput => "Clear output".to_string(),
       Action::ToggleKeymapWindow => "Toggle help".to_string(),
       Action::ToggleTheme => "Toggle dark/light theme".to_string(),

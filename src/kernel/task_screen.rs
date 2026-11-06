@@ -14,7 +14,7 @@ use tokio::{
 
 use crate::{
   kernel::{
-    copy_mode::{CopyMove, CopyState, Pos},
+    copy_mode::{CopyMove, CopyState, Pos, SearchDir, SearchStatus},
     task::TaskId,
   },
   protocol::caps::Background,
@@ -29,6 +29,7 @@ use crate::{
     image::ImageStore,
     key::{Key, KeyCode, KeyEventKind, KeyMods},
     mouse::{MouseButton, MouseEvent, MouseEventKind},
+    row::Row,
     style::{Style, StyleId},
     vt::emit,
   },
@@ -96,10 +97,12 @@ struct CopySession {
   images: ImageStore,
   /// The screen colors the live screen had.
   colors: FrameColors,
-  /// Styles interned into the frozen grid for the selection and the
-  /// badge.
+  /// Styles interned into the frozen grid for the selection, the badge,
+  /// and what a search found: the match the cursor is on stands out.
   highlight: StyleId,
   badge: StyleId,
+  found: StyleId,
+  found_current: StyleId,
   /// What observers draw while in copy mode: the frozen screen with the
   /// selection and the badge over it.
   present_handle: ScreenHandle,
@@ -149,6 +152,16 @@ pub enum TaskScreenCmd {
     unit: ScrollUnit,
   },
   CopyYank,
+  /// Search the frozen screen and its history for `query`, entering
+  /// copy mode first: what matches is highlighted and the cursor goes to
+  /// the nearest match up. An empty query ends the search.
+  CopySearch {
+    query: String,
+  },
+  /// Move the cursor to the next match up (older output) or down.
+  CopySearchMove {
+    dir: SearchDir,
+  },
   /// Blank the screen and its history; the program keeps running.
   ClearOutput,
 }
@@ -520,6 +533,13 @@ impl TaskScreen {
       TaskScreenCmd::CopyBeginSelection => self.copy_begin_selection(),
       TaskScreenCmd::Scroll { delta, unit } => self.scroll(delta, unit),
       TaskScreenCmd::CopyYank => self.copy_yank(),
+      TaskScreenCmd::CopySearch { query } => self.copy_search(&query),
+      TaskScreenCmd::CopySearchMove { dir } => {
+        if let Some(session) = &mut self.copy {
+          session.state.search_move(dir);
+          self.repaint_copy();
+        }
+      }
       TaskScreenCmd::ClearOutput => self.clear_output(),
     }
     self.settle(effects);
@@ -557,6 +577,21 @@ impl TaskScreen {
     }
   }
 
+  fn copy_search(&mut self, query: &str) {
+    let entered = self.enter_copy();
+    if let Some(session) = &mut self.copy {
+      session.state.search(query);
+    }
+    self.render_present();
+    match entered {
+      Some(present) => self.broadcast(|screen| ScreenNotify::CopyPresent {
+        screen,
+        handle: Some(present.clone()),
+      }),
+      None => self.broadcast(|screen| ScreenNotify::Render { screen }),
+    }
+  }
+
   fn copy_yank(&mut self) {
     let text = self.copy.as_ref().and_then(|s| s.state.selected_text());
     if let Some(text) = text {
@@ -576,6 +611,14 @@ impl TaskScreen {
       snapshot.intern_style(Style::default().fg(Color::BLACK).bg(Color::CYAN));
     let badge = snapshot
       .intern_style(Style::default().fg(Color::BLACK).bg(Color::BRIGHT_YELLOW));
+    let found = snapshot
+      .intern_style(Style::default().fg(Color::BLACK).bg(Color::YELLOW));
+    let found_current = snapshot.intern_style(
+      Style::default()
+        .fg(Color::BLACK)
+        .bg(Color::BRIGHT_MAGENTA)
+        .set_bold(true),
+    );
     let present_handle = ScreenHandle::new(Frame::of_grid(&snapshot));
     self.copy = Some(CopySession {
       state: CopyState::new(snapshot),
@@ -583,6 +626,8 @@ impl TaskScreen {
       colors: self.screen.frame_colors(),
       highlight,
       badge,
+      found,
+      found_current,
       present_handle: present_handle.clone(),
     });
     Some(present_handle)
@@ -775,9 +820,9 @@ impl TaskScreen {
   }
 
   /// Publishes what observers draw in copy mode: the frozen screen at
-  /// the observers' size, the selection over it, the badge, the cursor.
-  /// Rows are shared with the frozen grid; only those the selection or
-  /// the badge touch are copied.
+  /// the observers' size, what a search found and the selection over it,
+  /// the badge, the cursor. Rows are shared with the frozen grid; only
+  /// those the highlights or the badge touch are copied.
   fn render_present(&mut self) {
     let Some(session) = &mut self.copy else {
       return;
@@ -786,7 +831,7 @@ impl TaskScreen {
       width: self.size.x.max(1),
       height: self.size.y.max(1),
     };
-    session.state.snapshot_mut().set_size(size);
+    session.state.set_size(size);
     let copy = &session.state;
     let snapshot = copy.snapshot();
     let scrollback = copy.scrollback() as i32;
@@ -802,31 +847,38 @@ impl TaskScreen {
       tables.styles = Arc::new(session.colors.apply_table(&tables.styles));
     }
 
-    // The selection, on the rows it covers.
+    // The selection, or the lone cursor cell under what a search found;
+    // a selection being made is drawn over the matches.
     let (low, high) = Pos::to_low_high(start, end);
-    for (r, row) in rows.iter_mut().enumerate() {
-      let y = r as i32 - scrollback;
-      if y < low.y || y > high.y {
-        continue;
-      }
-      let row = Arc::make_mut(row);
-      for (x, cell) in row.cells.iter_mut().enumerate() {
-        if Pos::within(start, end, Pos { y, x: x as i32 }) {
-          cell.style = session.highlight;
-        }
-      }
+    let selecting = copy.end().is_some();
+    if !selecting {
+      paint(&mut rows, scrollback, low, high, session.highlight);
+    }
+    let matches = copy.matches();
+    let current = copy.current_match();
+    let view_top = -scrollback;
+    let view_bottom = view_top + rows.len() as i32 - 1;
+    let first = matches.partition_point(|m| m.end.y < view_top);
+    for found in matches[first..]
+      .iter()
+      .take_while(|m| m.start.y <= view_bottom)
+    {
+      let style = if current == Some(*found) {
+        session.found_current
+      } else {
+        session.found
+      };
+      paint(&mut rows, scrollback, found.start, found.end, style);
+    }
+    if selecting {
+      paint(&mut rows, scrollback, low, high, session.highlight);
     }
 
     // HUD badge in the top-right corner.
-    let off = copy.scrollback();
-    let label = if off > 0 {
-      format!(" COPY -{off} ")
-    } else {
-      " COPY ".to_string()
-    };
+    let label = badge_label(copy.scrollback(), copy.search_status());
     if let Some(top) = rows.first_mut() {
       let top = Arc::make_mut(top);
-      let first = size.width.saturating_sub(label.len() as u16);
+      let first = size.width.saturating_sub(label.chars().count() as u16);
       for (i, c) in label.chars().enumerate() {
         let cell = Cell::new(CellText::scalar(c, 1), session.badge);
         top.set(first + i as u16, cell);
@@ -939,6 +991,58 @@ impl TaskScreen {
     }
     changed
   }
+}
+
+/// Paints the cells from `from` to `to`, both included, in reading
+/// order, on the rows in view: row `r` shows `y = r - scrollback`.
+fn paint(
+  rows: &mut [Arc<Row>],
+  scrollback: i32,
+  from: Pos,
+  to: Pos,
+  style: StyleId,
+) {
+  let top = from.y.max(-scrollback);
+  let bottom = to.y.min(rows.len() as i32 - 1 - scrollback);
+  for y in top..=bottom {
+    let Some(row) = rows.get_mut((y + scrollback) as usize) else {
+      continue;
+    };
+    let row = Arc::make_mut(row);
+    let last = row.cells.len() as i32 - 1;
+    let x0 = if y == from.y { from.x.max(0) } else { 0 };
+    let x1 = if y == to.y { to.x.min(last) } else { last };
+    for x in x0..=x1 {
+      row.cells[x as usize].style = style;
+    }
+  }
+}
+
+/// The copy-mode badge: how far back the view is, and where a search
+/// stands, as ` 2/7 · COPY -40 `.
+fn badge_label(scrollback: usize, search: Option<SearchStatus>) -> String {
+  let mut label = String::from(" ");
+  match search {
+    Some(SearchStatus { total: 0, .. }) => label.push_str("no matches · "),
+    Some(SearchStatus {
+      current: Some(current),
+      total,
+    }) => label.push_str(&format!("{current}/{total} · ")),
+    Some(SearchStatus {
+      current: None,
+      total,
+    }) => {
+      let noun = if total == 1 { "match" } else { "matches" };
+      label.push_str(&format!("{total} {noun} · "));
+    }
+    None => (),
+  }
+  label.push_str("COPY");
+  if scrollback > 0 {
+    label.push_str(&format!(" -{scrollback}"));
+  }
+  label.push(' ');
+  label
 }
 
 /// Whether the child asked to receive this kind of mouse event under the
@@ -1420,6 +1524,153 @@ mod tests {
     let press = Key::new(KeyCode::Char('k'), KeyMods::NONE);
     input(&mut screen, observer, TermEvent::Key(press));
     assert_ne!(screen.copy.as_ref().unwrap().state.cursor(), before);
+  }
+
+  /// `screen_with_history` with `needle` at the end of every line that
+  /// ends in 5: `line5` 32 rows above the screen's top, ..., `line55` on
+  /// row 18.
+  async fn screen_with_needles()
+  -> (TaskScreen, ObserverId, UnboundedReceiver<ScreenNotify>) {
+    let mut screen = screen_of(DEFAULT_SIZE, 200, 3);
+    let (observer, rx, mut effects) = attach(&mut screen, cells(80, 24));
+    let mut out = String::new();
+    for i in 0..60 {
+      let needle = if i % 10 == 5 { " needle" } else { "" };
+      out.push_str(&format!("line{i}{needle}\r\n"));
+    }
+    screen.process(out.as_bytes(), &mut effects).await;
+    (screen, observer, rx)
+  }
+
+  fn search(screen: &mut TaskScreen, query: &str) {
+    let mut effects = Vec::new();
+    let query = query.to_string();
+    screen.handle_cmd(TaskScreenCmd::CopySearch { query }, &mut effects);
+  }
+
+  fn search_move(screen: &mut TaskScreen, dir: SearchDir) {
+    let mut effects = Vec::new();
+    screen.handle_cmd(TaskScreenCmd::CopySearchMove { dir }, &mut effects);
+  }
+
+  fn copy_state(screen: &TaskScreen) -> &CopyState {
+    &screen.copy.as_ref().unwrap().state
+  }
+
+  fn status(current: usize, total: usize) -> Option<SearchStatus> {
+    Some(SearchStatus {
+      current: Some(current),
+      total,
+    })
+  }
+
+  #[tokio::test]
+  async fn a_search_enters_copy_mode_at_the_newest_match_and_wraps() {
+    let (mut screen, _observer, mut rx) = screen_with_needles().await;
+    let _ = take_notifies(&mut rx);
+    search(&mut screen, "needle");
+    assert_eq!(take_notifies(&mut rx), ["copy"]);
+    let state = copy_state(&screen);
+    assert_eq!(state.matches().len(), 6);
+    assert_eq!(state.cursor(), Pos { y: 18, x: 7 });
+    assert_eq!(state.search_status(), status(1, 6));
+
+    // Up is older output; the view follows once a match is out of it.
+    search_move(&mut screen, SearchDir::Up);
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: 8, x: 7 });
+    assert_eq!(copy_offset(&screen), 0);
+    search_move(&mut screen, SearchDir::Up);
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: -2, x: 7 });
+    assert_eq!(copy_offset(&screen), 13);
+    for _ in 0..3 {
+      search_move(&mut screen, SearchDir::Up);
+    }
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: -32, x: 6 });
+    assert_eq!(copy_state(&screen).search_status(), status(6, 6));
+
+    // Past the top it wraps to the bottom, and back.
+    search_move(&mut screen, SearchDir::Up);
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: 18, x: 7 });
+    assert_eq!(copy_offset(&screen), 0);
+    search_move(&mut screen, SearchDir::Down);
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: -32, x: 6 });
+    assert_eq!(copy_offset(&screen), 37);
+  }
+
+  #[tokio::test]
+  async fn typing_on_keeps_the_match_the_cursor_is_on() {
+    let (mut screen, _observer, _rx) = screen_with_needles().await;
+    search(&mut screen, "need");
+    search_move(&mut screen, SearchDir::Up);
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: 8, x: 7 });
+    search(&mut screen, "needle");
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: 8, x: 7 });
+    assert_eq!(copy_state(&screen).search_status(), status(2, 6));
+    // Nothing matches: the cursor stays for the query to be fixed.
+    search(&mut screen, "needlex");
+    assert_eq!(
+      copy_state(&screen).search_status(),
+      Some(SearchStatus {
+        current: None,
+        total: 0
+      })
+    );
+    search(&mut screen, "needle");
+    assert_eq!(copy_state(&screen).cursor(), Pos { y: 8, x: 7 });
+    // Empty, the search ends; copy mode stays.
+    search(&mut screen, "");
+    assert_eq!(copy_state(&screen).search_status(), None);
+    assert!(copy_state(&screen).matches().is_empty());
+  }
+
+  #[tokio::test]
+  async fn matches_are_highlighted_and_counted_on_the_badge() {
+    let (mut screen, _observer, _rx) = screen_with_needles().await;
+    search(&mut screen, "needle");
+    let session = screen.copy.as_ref().unwrap();
+    let frame = session.present_handle.load();
+    let style = |row: usize, col: usize| frame.rows[row].cells[col].style;
+    // `line55 needle` on row 18 is the current match, `line45` another.
+    for col in 7..13 {
+      assert_eq!(style(18, col), session.found_current);
+      assert_eq!(style(8, col), session.found);
+    }
+    assert_ne!(style(18, 6), session.found_current);
+    assert_ne!(style(18, 13), session.found_current);
+    assert!(frame.row_text(0, 0, 80).ends_with(" 1/6 · COPY "));
+  }
+
+  #[tokio::test]
+  async fn a_resize_finds_the_matches_again() {
+    let (mut screen, observer, _rx) = screen_with_needles().await;
+    search(&mut screen, "needle");
+    input(&mut screen, observer, TermEvent::resize(40, 12));
+    let state = copy_state(&screen);
+    assert_eq!(state.matches().len(), 6);
+    let grid = state.snapshot();
+    let newest = *state.matches().last().unwrap();
+    assert!((0..12).contains(&newest.start.y), "{newest:?}");
+    let line = grid.line_text(newest.start.y as u16);
+    assert!(
+      line[newest.start.x as usize..].starts_with("needle"),
+      "{line}"
+    );
+  }
+
+  #[test]
+  fn badge_labels() {
+    assert_eq!(badge_label(0, None), " COPY ");
+    assert_eq!(badge_label(40, status(2, 7)), " 2/7 · COPY -40 ");
+    let none = Some(SearchStatus {
+      current: None,
+      total: 0,
+    });
+    assert_eq!(badge_label(0, none), " no matches · COPY ");
+    let off = Some(SearchStatus {
+      current: None,
+      total: 3,
+    });
+    assert_eq!(badge_label(0, off), " 3 matches · COPY ");
   }
 
   #[tokio::test]

@@ -209,6 +209,16 @@ impl KeymapConfig {
       Action::CopyModeEnter,
     );
 
+    // Find in the output. `<C-f>` goes last: it is the key help shows.
+    let ctrlf = Key::new(KeyCode::Char('f'), KeyMods::CONTROL);
+    s.keymap_add_p(KeyCode::Char('/').into(), Action::Search);
+    s.keymap_add_p(ctrlf.clone(), Action::Search);
+    s.keymap_add_t(ctrlf.clone(), Action::Search);
+    s.keymap_add_c(KeyCode::Char('/').into(), Action::Search);
+    s.keymap_add_c(ctrlf, Action::Search);
+    s.keymap_add_c(KeyCode::Char('n').into(), Action::SearchNext);
+    s.keymap_add_c(KeyCode::Char('N').into(), Action::SearchPrev);
+
     for i in 0..8 {
       let char = char::from_digit(i + 1, 10).unwrap();
       s.keymap_add_p(

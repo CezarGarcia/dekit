@@ -5,6 +5,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::{
   UnboundedReceiver, UnboundedSender, unbounded_channel,
 };
+use tui_input::{Input, InputRequest};
 
 use crate::{
   command::Command,
@@ -20,18 +21,19 @@ use crate::{
       quit::QuitModal,
       runner_select::RunnerSelectModal,
     },
-    state::{ConfigStatus, Scope, State},
+    state::{ConfigStatus, Scope, SearchBar, State},
     task_tree::{Node, TaskTree},
     task_view::TaskView,
     theme::{BlockTheme, Theme},
     ui_header::{HeaderInfo, render_header},
     ui_keymap::render_keymap,
     ui_tasks::render_tasks,
-    ui_term::render_term,
+    ui_term::{render_search_bar, render_term},
     ui_zoom_tip::render_zoom_tip,
+    widgets::text_input::{paste_line, to_input_request},
   },
   kernel::{
-    copy_mode::CopyMove as KernelCopyMove,
+    copy_mode::{CopyMove as KernelCopyMove, SearchDir},
     kernel_message::{KernelCommand, TaskContext, TaskRegistration},
     sub_trie::SubMode,
     task::{
@@ -52,7 +54,7 @@ use crate::{
   term::{
     CursorStyle, Geometry, Grid, Screen, ScreenHandle, TermEvent,
     grid::Rect,
-    key::{Key, KeyEventKind},
+    key::{Key, KeyCode, KeyEventKind, KeyMods},
     mouse::{MouseButton, MouseEventKind},
     style::Style,
   },
@@ -178,6 +180,8 @@ impl App {
         toast: None,
         config: ConfigStatus::default(),
         drag: None,
+        search: None,
+        last_search: String::new(),
       },
       theme: Theme::resolve(project.config().tui.theme, None),
       background: None,
@@ -283,6 +287,7 @@ impl App {
   }
 
   fn render(&mut self) {
+    self.sync_search();
     let layout = self.layout();
     let client_versions: Vec<String> =
       self.screen.client_versions().map(String::from).collect();
@@ -322,6 +327,9 @@ impl App {
       theme,
     );
     render_term(layout.term, grid, &self.state, theme);
+    if let Some(bar) = &self.state.search {
+      render_search_bar(layout.term, grid, bar, theme);
+    }
     render_keymap(layout.keymap, grid, &self.state, &self.keymap, theme);
     render_zoom_tip(layout.zoom_banner, grid, &self.keymap, theme);
     if let Some(modal) = &mut self.modal {
@@ -494,6 +502,14 @@ impl App {
         if let Some(modal) = &mut self.modal {
           let result = modal.handle_paste(&text);
           self.modal_result(Some(observer), result);
+        } else if let Some(bar) = &mut self.state.search {
+          let selected = std::mem::take(&mut bar.selected);
+          if selected {
+            bar.input = Input::default();
+          }
+          if paste_line(&mut bar.input, &text) || selected {
+            self.search_changed();
+          }
         } else if self.state.scope.is_term()
           && let Some(task) = self.state.current_task()
         {
@@ -528,6 +544,8 @@ impl App {
       | TaskScreenCmd::CopyBeginSelection
       | TaskScreenCmd::Scroll { .. }
       | TaskScreenCmd::CopyYank
+      | TaskScreenCmd::CopySearch { .. }
+      | TaskScreenCmd::CopySearchMove { .. }
       | TaskScreenCmd::ClearOutput => return,
     };
     self.with_screen(|screen, effects| screen.handle_cmd(cmd, effects));
@@ -685,6 +703,11 @@ impl App {
     if let Some(modal) = &mut self.modal {
       let result = modal.handle_key(&key);
       self.modal_result(Some(observer), result);
+      return;
+    }
+    self.sync_search();
+    if self.state.search.is_some() {
+      self.search_key(&key);
       return;
     }
     let group = self.state.keymap_group();
@@ -932,9 +955,126 @@ impl App {
       Action::CopyModeCopy => {
         self.send_current(current, TaskScreenCmd::CopyYank)
       }
+      Action::Search => self.open_search(current),
+      Action::SearchNext => self.send_current(
+        current,
+        TaskScreenCmd::CopySearchMove { dir: SearchDir::Up },
+      ),
+      Action::SearchPrev => self.send_current(
+        current,
+        TaskScreenCmd::CopySearchMove {
+          dir: SearchDir::Down,
+        },
+      ),
       Action::SendKey { key } => {
         self.input_current(current, TermEvent::Key(key))
       }
+    }
+  }
+
+  /// Opens the find bar on the current task, with the last query, which
+  /// is looked for at once; the task's screen goes into copy mode.
+  fn open_search(&mut self, current: Option<TaskId>) {
+    let Some(task) = current else {
+      return;
+    };
+    if !self.state.scope.is_term() {
+      self.state.scope = Scope::Term;
+    }
+    let entered_copy = self
+      .state
+      .current_task()
+      .is_some_and(|task| task.present.is_none());
+    let query = self.state.last_search.clone();
+    self.state.search = Some(SearchBar {
+      task,
+      selected: !query.is_empty(),
+      input: Input::new(query.clone()),
+      entered_copy,
+    });
+    self.pc.send_msg(task, TaskScreenCmd::CopySearch { query });
+  }
+
+  /// A key while the find bar is open: it edits the query, which is
+  /// looked for as it is typed; Enter and Up go to the next match up,
+  /// Shift+Enter and Down to the next one down; Esc closes the bar.
+  fn search_key(&mut self, key: &Key) {
+    let Some(bar) = &mut self.state.search else {
+      return;
+    };
+    let task = bar.task;
+    let dir = match (key.code, key.mods) {
+      (KeyCode::Esc, _) => return self.close_search(),
+      (KeyCode::Enter | KeyCode::Up, KeyMods::NONE) => Some(SearchDir::Up),
+      (KeyCode::Enter, KeyMods::SHIFT) | (KeyCode::Down, KeyMods::NONE) => {
+        Some(SearchDir::Down)
+      }
+      _ => None,
+    };
+    if let Some(dir) = dir {
+      bar.selected = false;
+      self
+        .pc
+        .send_msg(task, TaskScreenCmd::CopySearchMove { dir });
+      return;
+    }
+    let Some(request) = to_input_request(key) else {
+      return;
+    };
+    // Typing over the selected query replaces it; moving keeps it.
+    let edits = !matches!(
+      request,
+      InputRequest::GoToPrevChar
+        | InputRequest::GoToNextChar
+        | InputRequest::GoToPrevWord
+        | InputRequest::GoToNextWord
+        | InputRequest::GoToStart
+        | InputRequest::GoToEnd
+    );
+    let replaced = std::mem::take(&mut bar.selected) && edits;
+    if replaced {
+      bar.input = Input::default();
+    }
+    let changed = bar.input.handle(request).is_some_and(|change| change.value);
+    if changed || replaced {
+      self.search_changed();
+    }
+  }
+
+  /// Looks for what the find bar has now.
+  fn search_changed(&self) {
+    if let Some(bar) = &self.state.search {
+      let query = bar.input.value().to_string();
+      self
+        .pc
+        .send_msg(bar.task, TaskScreenCmd::CopySearch { query });
+    }
+  }
+
+  /// Closes the find bar. What it found stays highlighted, and the view
+  /// where it is, until copy mode is left; a bar closed empty leaves the
+  /// copy mode it entered.
+  fn close_search(&mut self) {
+    let Some(bar) = self.state.search.take() else {
+      return;
+    };
+    let query = bar.input.value().to_string();
+    if query.is_empty() && bar.entered_copy {
+      self.pc.send_msg(bar.task, TaskScreenCmd::CopyLeave);
+    }
+    self.state.last_search = query;
+  }
+
+  /// The find bar belongs to the task it was opened on, in the terminal:
+  /// it closes once another task is shown or the task list has focus.
+  fn sync_search(&mut self) {
+    let Some(bar) = &self.state.search else {
+      return;
+    };
+    let shown = self.state.current_task().map(|task| task.id);
+    if shown != Some(bar.task) || !self.state.scope.is_term() {
+      self.state.last_search = bar.input.value().to_string();
+      self.state.search = None;
     }
   }
 

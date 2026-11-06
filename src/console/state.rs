@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
+use tui_input::Input;
+
 use crate::console::{
   keymap::KeymapGroup, task_tree::TaskTree, task_view::TaskView,
   ui_header::HeaderHits,
@@ -60,6 +62,22 @@ pub struct State {
   pub config: ConfigStatus,
   /// A task or group being dragged in the list.
   pub drag: Option<Drag>,
+  /// The find bar, while it is open.
+  pub search: Option<SearchBar>,
+  /// What the find bar had when it last closed: it opens with it again.
+  pub last_search: String,
+}
+
+/// The find bar on a task's terminal: what is typed is looked for in the
+/// task's output, which copy mode holds still meanwhile.
+pub struct SearchBar {
+  pub task: TaskId,
+  pub input: Input,
+  /// The value is shown selected, as the bar opens with the last query:
+  /// typing replaces it, moving the cursor keeps it.
+  pub selected: bool,
+  /// The bar put the task in copy mode: closing it empty leaves it.
+  pub entered_copy: bool,
 }
 
 pub struct Toast {

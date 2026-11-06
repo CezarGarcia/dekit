@@ -220,6 +220,9 @@ fn menu_items() -> Vec<MenuItem> {
     Action::CopyModeLeave,
     Action::CopyModeEnd,
     Action::CopyModeCopy,
+    Action::Search,
+    Action::SearchNext,
+    Action::SearchPrev,
   ];
   actions
     .into_iter()

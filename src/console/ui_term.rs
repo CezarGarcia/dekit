@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
 
 use crate::console::{
-  state::State,
+  state::{SearchBar, State},
   task_tree::{Group, Node},
   theme::{BlockStyle, Theme},
+  widgets::{border::draw_hints, text_input::render_text_field},
 };
 use crate::kernel::task_path::TaskPath;
 use crate::term::{
@@ -58,6 +59,57 @@ pub fn render_term(area: Rect, grid: &mut Grid, state: &State, theme: &Theme) {
     });
     grid.cursor_style = frame.cursor_style;
   }
+}
+
+/// The find bar on the terminal's bottom border: the query on the left,
+/// its keys on the right when there is room. The cursor goes to the
+/// query.
+pub fn render_search_bar(
+  area: Rect,
+  grid: &mut Grid,
+  bar: &SearchBar,
+  theme: &Theme,
+) {
+  const LABEL: &str = " Find ";
+  const MIN_FIELD: u16 = 20;
+  const MAX_FIELD: u16 = 40;
+  if area.width < 16 || area.height < 3 {
+    return;
+  }
+  let style = theme.block.panel(true);
+  let mut row = Rect::new(area.x + 1, area.bottom() - 1, area.width - 2, 1);
+  // The label, the field, and a blank after it.
+  let room = row.width.saturating_sub(LABEL.width() as u16 + 1);
+  let hints = [("<CR>", "up"), ("<S-CR>", "down"), ("<Esc>", "close")];
+  // As `draw_hints` lays them out, with the gap before the corner.
+  let hints_width = hints
+    .iter()
+    .map(|(key, what)| (key.width() + what.width() + 3) as u16)
+    .sum::<u16>()
+    + 1;
+  let field_width = if room >= hints_width + MIN_FIELD {
+    draw_hints(grid, area, &hints, &style);
+    room - hints_width
+  } else {
+    room
+  }
+  .min(MAX_FIELD);
+
+  grid.draw_text(row.take_left(LABEL.width() as u16), LABEL, style.title);
+  let field = row.take_left(field_width);
+  let line = theme.block.border_focused;
+  let hint = "type to search";
+  let cursor =
+    render_text_field(&bar.input, field, grid, hint, None, &style, line);
+  if bar.selected {
+    // The query as shown, up to the cursor after it.
+    let mut shown = field;
+    shown.width = cursor.col - field.x;
+    let selected = theme.block.selected_bg.into();
+    grid.map_styles(shown, |attrs| attrs.bg(selected));
+  }
+  grid.draw_text(row.take_left(1), " ", style.border);
+  grid.cursor_pos = Some(cursor);
 }
 
 /// In place of a terminal, what a group row stands for.

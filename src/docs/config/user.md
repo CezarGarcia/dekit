@@ -107,6 +107,8 @@ Default bindings in `tasks`:
   desc: zoom
 - cmd: <v>
   desc: copy-mode-enter
+- cmd: </>, <C-f>
+  desc: search, the selected task's output (|cli/attach|)
 - cmd: <?>
   desc: toggle-keymap-window
 - cmd: <C-c>
@@ -120,8 +122,11 @@ Default bindings in `tasks`:
 :::
 
 In `term_copy`: `<Esc>` copy-mode-leave, `<v>` copy-mode-end, `<c>`
-copy-mode-copy, `<h>` `<j>` `<k>` `<l>` or the arrows copy-mode-move, and
-the same scroll keys. Other actions: focus-tasks, focus-term, restart-all,
+copy-mode-copy, `<h>` `<j>` `<k>` `<l>` or the arrows copy-mode-move, `</>`
+or `<C-f>` search, `<n>` search-next (up, older output), `<N>`
+search-prev (down), and the same scroll keys. In `term`, `<C-f>` is
+search too, so it does not reach the task; `<C-f>: null` there gives it
+back. Other actions: focus-tasks, focus-term, restart-all,
 force-restart-all, veto-task, close-current-modal, duplicate-task (a
 copy without the dialog), show-reload, show-write-back, save-to-config,
 show-main-menu (the

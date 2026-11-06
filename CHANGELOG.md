@@ -1,5 +1,14 @@
 ## Unreleased
 
+- The console finds text in a task's output: `<C-f>`, or `/` in the task
+  list or copy mode, opens a find bar on the terminal. Matches in the
+  screen and its scrollback are highlighted as you type, the newest
+  first; `<Enter>` and `<S-Enter>`, or `n` and `N` in copy mode, go to the
+  next match up and down, and the copy badge counts them, as `2/7`. A
+  query without capital letters ignores case. `<C-f>` is bound in `term`
+  as well, where it no longer reaches the task
+- Keymap actions `search`, `search-next`, and `search-prev`
+
 - The console shows a service as `STARTING` until its ready check
   passes, and a task winding down as `STOPPING`, instead of `UP`; a
   group's count takes only the tasks that are up

@@ -1147,6 +1147,122 @@ mod tests {
     finish(pc, sender, receiver, session, kernel_handle).await;
   }
 
+  /// Waits until a row of the console's screen contains `needle`, or
+  /// with `shown` false until none does, reading what the session sends
+  /// meanwhile.
+  #[cfg(not(windows))]
+  async fn console_shows(
+    pc: &TaskContext,
+    receiver: &mut ConnReceiver,
+    needle: &str,
+    shown: bool,
+  ) -> bool {
+    let target: crate::target::Target = "@dekit/console".parse().unwrap();
+    timeout(Duration::from_secs(5), async {
+      loop {
+        let (_, vt) = crate::dekit::server::resolve_screen(pc, &target)
+          .await
+          .unwrap();
+        let frame = vt.load();
+        let found = (0..frame.size.height)
+          .any(|row| frame.row_text(row, 0, frame.size.width).contains(needle));
+        if found == shown {
+          return;
+        }
+        let _ = timeout(Duration::from_millis(20), receiver.recv()).await;
+      }
+    })
+    .await
+    .is_ok()
+  }
+
+  #[cfg(not(windows))]
+  #[tokio::test]
+  async fn the_console_finds_text_in_a_task_output() {
+    use crate::task::process_task::{RunCx, process_task};
+
+    let config = Arc::new(Config::make_default());
+    let mut kernel = Kernel::new();
+    let pc = kernel.context();
+    let console_id = pc.alloc_id();
+    kernel
+      .register_task_registration(console_task_registration(
+        console_id,
+        TaskDef {
+          space: TaskSpaceId::dekit(),
+          path: Some(TaskPath::new("console").unwrap()),
+          ..TaskDef::default()
+        },
+        crate::project::Project::new(config.clone()),
+        config.keymap.build(),
+        Default::default(),
+      ))
+      .unwrap();
+    let mut task = process_task(
+      &RunCx::of(&config),
+      pc.alloc_id(),
+      Some(TaskKey::default_space(TaskPath::new("logs").unwrap())),
+      serde_yaml::from_str(
+        "{cmd: [sh, -c, 'echo boot; echo needle one; echo middle; \
+         echo needle two; sleep 30']}",
+      )
+      .unwrap(),
+    )
+    .unwrap();
+    task.def.pinned = true;
+    kernel.register_task_registration(task).unwrap();
+    let kernel_handle = tokio::spawn(kernel.run());
+
+    let (mut sender, mut receiver, session) =
+      attach(&pc, &config, "@dekit/console", false).await;
+    let rx = &mut receiver;
+    assert!(console_shows(&pc, rx, "needle two", true).await);
+
+    // `<C-f>` opens the find bar; what is typed is found as it is typed,
+    // the newest match first.
+    let ctrl_f = Key::new(KeyCode::Char('f'), KeyMods::CONTROL);
+    press_key(&mut sender, ctrl_f.clone()).await;
+    assert!(console_shows(&pc, rx, " Find ", true).await);
+    for c in "needle".chars() {
+      press(&mut sender, c).await;
+    }
+    assert!(console_shows(&pc, rx, "1/2 · COPY", true).await);
+    press_key(&mut sender, Key::new(KeyCode::Enter, KeyMods::NONE)).await;
+    assert!(console_shows(&pc, rx, "2/2 · COPY", true).await);
+
+    // Closed, the bar leaves copy mode at the match; `n` and `N` go on.
+    press_key(&mut sender, Key::new(KeyCode::Esc, KeyMods::NONE)).await;
+    assert!(console_shows(&pc, rx, " Find ", false).await);
+    assert!(console_shows(&pc, rx, "2/2 · COPY", true).await);
+    press(&mut sender, 'n').await;
+    assert!(console_shows(&pc, rx, "1/2 · COPY", true).await);
+    press(&mut sender, 'N').await;
+    assert!(console_shows(&pc, rx, "2/2 · COPY", true).await);
+    press_key(&mut sender, Key::new(KeyCode::Esc, KeyMods::NONE)).await;
+    assert!(console_shows(&pc, rx, "COPY", false).await);
+
+    // It opens again with the last query, which typing replaces.
+    press_key(&mut sender, ctrl_f).await;
+    assert!(console_shows(&pc, rx, "1/2 · COPY", true).await);
+    for c in "middle".chars() {
+      press(&mut sender, c).await;
+    }
+    assert!(console_shows(&pc, rx, "1/1 · COPY", true).await);
+    // Emptied and closed, it leaves the copy mode it entered.
+    press_key(&mut sender, Key::new(KeyCode::Char('u'), KeyMods::CONTROL))
+      .await;
+    assert!(console_shows(&pc, rx, "no matches", false).await);
+    press_key(&mut sender, Key::new(KeyCode::Esc, KeyMods::NONE)).await;
+    assert!(console_shows(&pc, rx, "COPY", false).await);
+
+    // No SIGCHLD waiter in unit tests: remove the task so quit can finish.
+    pc.send(KernelCommand::Remove(
+      crate::kernel::kernel_message::TaskSelector::all(),
+      None,
+    ));
+    finish(pc, sender, receiver, session, kernel_handle).await;
+  }
+
   #[cfg(not(windows))]
   #[tokio::test]
   async fn screen_commands_drive_copy_mode_on_a_process() {

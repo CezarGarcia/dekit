@@ -16,6 +16,17 @@ many of its tasks are up; `<h>` and `<l>` collapse and expand it, as does
 a click, and starting, stopping, or restarting it acts on every task in
 it.
 
+`<C-f>`, or `/` in the task list, finds text in the selected task's
+output and scrollback. Copy mode holds the screen still while you type;
+every match is highlighted, the cursor goes to the newest, and the copy
+badge says which match it is on, as `2/7`. `<Enter>` or `<Up>` goes to
+the next match up, in older output, and `<S-Enter>` or `<Down>` the next
+one down; both wrap around. A query without capital letters ignores
+case. `<Esc>` closes the bar and leaves the view at the match, where `n`
+and `N` go on, `v` starts a selection, and `<Esc>` again leaves copy
+mode. The bar opens again with the last query, selected, so typing
+replaces it.
+
 The runner is started if it is not running, with no tasks (|cli/up|
 starts them); `--no-start` fails instead. In the console, `q` asks how
 to quit: `q` again stops the runner like |cli/down|, `x` stops it
