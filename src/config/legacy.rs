@@ -49,6 +49,7 @@ impl From<crate::mprocs::config::Config> for Config {
         },
         zoom_tip: true,
         theme: ThemeMode::Auto,
+        git: TuiConfig::builtin().git,
       },
       keymap: KeymapConfig::default(),
       on_init: legacy.on_init.map(Hook::LegacyAction),

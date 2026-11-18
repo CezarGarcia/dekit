@@ -1,12 +1,14 @@
 pub mod action;
 pub mod app;
 pub mod app_layout;
+pub mod git_view;
 pub mod keymap;
 pub mod modal;
 pub mod state;
 pub mod task_tree;
 pub mod task_view;
 pub mod theme;
+pub mod ui_git;
 pub mod ui_header;
 pub mod ui_keymap;
 pub mod ui_tasks;

@@ -223,6 +223,15 @@ fn menu_items() -> Vec<MenuItem> {
     Action::Search,
     Action::SearchNext,
     Action::SearchPrev,
+    Action::ShowTasks,
+    Action::ShowGit,
+    Action::GitFetch,
+    Action::GitNext,
+    Action::GitPrev,
+    Action::GitFocusFiles,
+    Action::GitFocusDiff,
+    Action::GitScrollLeft,
+    Action::GitScrollRight,
   ];
   actions
     .into_iter()

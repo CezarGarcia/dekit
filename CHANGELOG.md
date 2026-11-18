@@ -6,6 +6,19 @@
   makes a GitHub release only; crates.io, npm, and PyPI stay the
   original's
 
+- The console has a git view, beside the tasks, when the project is in
+  a git repository: the checked-out branch with what there is to push
+  and to pull, the changed files, staged and not, with the lines each
+  adds and removes, and the selected file's diff. The header has a tab
+  for each view and names the branch in both; `<2>` and `<1>`, or a
+  click, switch. It follows the repository by itself, and only reads it
+- The console fetches from the remote every `tui.git.fetch_every` (5m,
+  or `off`) while someone is attached, and on `<f>` in the git view,
+  without ever asking for a password
+- Keymap group `git`, and the actions `show-tasks`, `show-git`,
+  `git-next`, `git-prev`, `git-focus-files`, `git-focus-diff`,
+  `git-scroll-left`, `git-scroll-right`, and `git-fetch`
+
 - The console finds text in a task's output: `<C-f>`, or `/` in the task
   list or copy mode, opens a find bar on the terminal. Matches in the
   screen and its scrollback are highlighted as you type, the newest

@@ -8,7 +8,8 @@
 </p>
 
 > **This is a fork of [dekit](https://github.com/pvolok/dekit).** It adds
-> finding text in a task's output: `Ctrl+F` in the terminal UI. It installs
+> finding text in a task's output, `Ctrl+F` in the terminal UI, and a git
+> view: the branch, the changed files, and their diffs, on `2`. It installs
 > and updates from this repository's releases: every push to `master`
 > builds them.
 

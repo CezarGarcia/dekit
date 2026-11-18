@@ -1,9 +1,12 @@
+use std::time::Duration;
+
 use anyhow::{Result, bail};
 
 use crate::cfg::{CfgCx, CfgNode, CfgObj, FromCfg};
 
 const DEFAULT_SIDEBAR_WIDTH: usize = 30;
 const DEFAULT_SIDEBAR_TITLE: &str = "Tasks";
+const DEFAULT_FETCH_EVERY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 pub struct TuiConfig {
@@ -11,6 +14,30 @@ pub struct TuiConfig {
   pub tips: TipsConfig,
   pub zoom_tip: bool,
   pub theme: ThemeMode,
+  pub git: GitConfig,
+}
+
+#[derive(Clone)]
+pub struct GitConfig {
+  /// How often the console fetches from the repository's remote while
+  /// someone is attached; never when none.
+  pub fetch_every: Option<Duration>,
+}
+
+/// `tui.git.fetch_every`: a duration, or `off`.
+struct FetchEvery(Option<Duration>);
+
+impl FromCfg for FetchEvery {
+  fn from_cfg(node: &CfgNode<'_>, cx: &CfgCx) -> Result<Self> {
+    match node.raw() {
+      serde_yaml::Value::String(s) if s == "off" => Ok(FetchEvery(None)),
+      serde_yaml::Value::Bool(false) => Ok(FetchEvery(None)),
+      _ => match Duration::from_cfg(node, cx) {
+        Ok(every) => Ok(FetchEvery(Some(every))),
+        Err(_) => bail!(node.error("expected a duration such as 5m, or off")),
+      },
+    }
+  }
 }
 
 /// The console's colors: `auto` follows the attached terminal's
@@ -64,6 +91,9 @@ impl TuiConfig {
       tips: TipsConfig { show: true },
       zoom_tip: true,
       theme: ThemeMode::Auto,
+      git: GitConfig {
+        fetch_every: Some(DEFAULT_FETCH_EVERY),
+      },
     }
   }
 
@@ -72,7 +102,7 @@ impl TuiConfig {
       Some(node) => node.as_obj()?,
       None => return Ok(()),
     };
-    tui_obj.known_keys(&["sidebar", "tips", "zoom_tip", "theme"])?;
+    tui_obj.known_keys(&["sidebar", "tips", "zoom_tip", "theme", "git"])?;
 
     if let Some(pl) = tui_obj.get("sidebar") {
       let pl = pl.as_obj()?;
@@ -90,6 +120,14 @@ impl TuiConfig {
 
     self.zoom_tip = tui_obj.default("zoom_tip", self.zoom_tip, cx)?;
     self.theme = tui_obj.default("theme", self.theme, cx)?;
+
+    if let Some(git) = tui_obj.get("git") {
+      let git = git.as_obj()?;
+      git.known_keys(&["fetch_every"])?;
+      if let Some(every) = git.optional::<FetchEvery>("fetch_every", cx)? {
+        self.git.fetch_every = every.0;
+      }
+    }
 
     Ok(())
   }
@@ -125,5 +163,26 @@ mod tests {
       format!("{err:#}").contains("auto, dark, or light"),
       "{err:#}"
     );
+  }
+
+  #[test]
+  fn the_fetch_takes_a_duration_or_off() {
+    let every = |yaml: &str| merged(yaml).map(|tui| tui.git.fetch_every);
+    assert_eq!(
+      TuiConfig::builtin().git.fetch_every,
+      Some(Duration::from_secs(300))
+    );
+    assert_eq!(
+      every("tui: {git: {fetch_every: 30s}}").unwrap(),
+      Some(Duration::from_secs(30))
+    );
+    assert_eq!(every("tui: {git: {fetch_every: off}}").unwrap(), None);
+    assert_eq!(every("tui: {git: {fetch_every: false}}").unwrap(), None);
+    assert_eq!(
+      every("tui: {git: {}}").unwrap(),
+      Some(Duration::from_secs(300))
+    );
+    let err = every("tui: {git: {fetch_every: soon}}").err().unwrap();
+    assert!(format!("{err:#}").contains("5m, or off"), "{err:#}");
   }
 }

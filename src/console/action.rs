@@ -138,6 +138,24 @@ pub enum Action {
   /// Dark or light; bound only in debug builds until themes settle.
   ToggleTheme,
 
+  /// The task list and the terminal: what the console opens with.
+  ShowTasks,
+  /// The project's git repository: its branch, its changes, and a diff.
+  ShowGit,
+  /// The next change in the git view; a line down while the diff has
+  /// the focus.
+  GitNext,
+  /// The change before; a line up while the diff has the focus.
+  GitPrev,
+  GitFocusFiles,
+  GitFocusDiff,
+  /// Show what is cut off at the left of the diff.
+  GitScrollLeft,
+  /// Show what is cut off at the right of the diff.
+  GitScrollRight,
+  /// Fetch from the repository's remote now.
+  GitFetch,
+
   SendKey {
     #[serde(with = "key_spec")]
     key: Key,
@@ -231,6 +249,15 @@ impl Action {
       Action::ClearOutput => "Clear output".to_string(),
       Action::ToggleKeymapWindow => "Toggle help".to_string(),
       Action::ToggleTheme => "Toggle dark/light theme".to_string(),
+      Action::ShowTasks => "Show the tasks".to_string(),
+      Action::ShowGit => "Show git".to_string(),
+      Action::GitNext => "Next change".to_string(),
+      Action::GitPrev => "Previous change".to_string(),
+      Action::GitFocusFiles => "Focus the changes".to_string(),
+      Action::GitFocusDiff => "Focus the diff".to_string(),
+      Action::GitScrollLeft => "Scroll the diff left".to_string(),
+      Action::GitScrollRight => "Scroll the diff right".to_string(),
+      Action::GitFetch => "Fetch from the remote".to_string(),
       Action::SendKey { key } => format!("Send {} key", key.spec()),
     }
   }

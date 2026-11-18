@@ -13,6 +13,7 @@ use crate::{
   console::{
     action::{Action, CopyMove, RunnerTab, ScrollUnit},
     app_layout::AppLayout,
+    git_view::GitFocus,
     keymap::{Keymap, KeymapGroup},
     modal::{
       commands_menu::CommandsMenuModal,
@@ -21,10 +22,11 @@ use crate::{
       quit::QuitModal,
       runner_select::RunnerSelectModal,
     },
-    state::{ConfigStatus, Scope, SearchBar, State},
+    state::{Scope, SearchBar, State, View},
     task_tree::{Node, TaskTree},
     task_view::TaskView,
     theme::{BlockTheme, Theme},
+    ui_git::render_git,
     ui_header::{HeaderInfo, render_header},
     ui_keymap::render_keymap,
     ui_tasks::render_tasks,
@@ -65,6 +67,10 @@ use crate::upgrade::snapshot::TaskKind as TaskKindSnapshot;
 #[path = "app_edit.rs"]
 mod edit;
 use edit::{ConsoleMsg, Purpose};
+
+#[path = "app_git.rs"]
+mod git_sync;
+use git_sync::GitSync;
 
 fn kernel_copy_move(dir: CopyMove) -> KernelCopyMove {
   match dir {
@@ -155,6 +161,9 @@ pub struct App {
   disk_config: Option<(u64, Arc<Config>)>,
   /// Counts the changes to the files the config is read from.
   config_generation: u64,
+
+  /// When the project's git repository is read.
+  git: GitSync,
 }
 
 impl App {
@@ -169,20 +178,10 @@ impl App {
   ) -> Self {
     let (sink, notifies) = unbounded_channel();
     App {
-      state: State {
-        scope: Scope::Tasks,
-        tasks: TaskTree::with_groups(groups),
-        hide_keymap_window: !project.config().tui.tips.show,
-        quitting: false,
-        header: Default::default(),
-        unsaved_hit: None,
-        hover: None,
-        toast: None,
-        config: ConfigStatus::default(),
-        drag: None,
-        search: None,
-        last_search: String::new(),
-      },
+      state: State::new(
+        TaskTree::with_groups(groups),
+        !project.config().tui.tips.show,
+      ),
       theme: Theme::resolve(project.config().tui.theme, None),
       background: None,
       project,
@@ -202,6 +201,7 @@ impl App {
       status_running: false,
       disk_config: None,
       config_generation: 0,
+      git: GitSync::default(),
     }
   }
 
@@ -271,9 +271,12 @@ impl App {
           self.state.toast = None;
           self.dirty = true;
         }
+        () = sleep_until(self.git.poll_at) => self.git_poll(),
+        () = changed(&mut self.git.changes) => self.git_changed(),
       }
 
       self.refresh_status();
+      self.git_refresh();
       if self.dirty && self.screen.has_observers() {
         self.dirty = false;
         self.render();
@@ -289,6 +292,9 @@ impl App {
   fn render(&mut self) {
     self.sync_search();
     let layout = self.layout();
+    let frame = self.frame();
+    let git = self.header_git();
+    let git_view = self.state.view == View::Git;
     let client_versions: Vec<String> =
       self.screen.client_versions().map(String::from).collect();
     let theme = &self.theme;
@@ -303,8 +309,13 @@ impl App {
     grid.cursor_style = CursorStyle::Default;
 
     let config = self.project.config();
+    // The git view has the header even while the task view is zoomed.
+    let (header_area, git_area) = {
+      let mut rest = frame;
+      (rest.take_top(1), rest)
+    };
     let header = render_header(
-      layout.header,
+      if git_view { header_area } else { layout.header },
       grid,
       &HeaderInfo {
         runner: config.runner.as_ref(),
@@ -314,24 +325,30 @@ impl App {
         held: self.modal.as_ref().and_then(|modal| modal.unshaded()),
         config_changes: self.state.config.changes,
         config_error: self.state.config.broken,
+        git,
       },
       theme,
     );
     self.state.header = header;
-    render_tasks(
-      layout.sidebar,
-      grid,
-      &mut self.state,
-      &config,
-      &self.keymap,
-      theme,
-    );
-    render_term(layout.term, grid, &self.state, theme);
-    if let Some(bar) = &self.state.search {
-      render_search_bar(layout.term, grid, bar, theme);
+    if git_view {
+      let now = std::time::SystemTime::now();
+      render_git(git_area, grid, &mut self.state, &self.keymap, theme, now);
+    } else {
+      render_tasks(
+        layout.sidebar,
+        grid,
+        &mut self.state,
+        &config,
+        &self.keymap,
+        theme,
+      );
+      render_term(layout.term, grid, &self.state, theme);
+      if let Some(bar) = &self.state.search {
+        render_search_bar(layout.term, grid, bar, theme);
+      }
+      render_keymap(layout.keymap, grid, &self.state, &self.keymap, theme);
+      render_zoom_tip(layout.zoom_banner, grid, &self.keymap, theme);
     }
-    render_keymap(layout.keymap, grid, &self.state, &self.keymap, theme);
-    render_zoom_tip(layout.zoom_banner, grid, &self.keymap, theme);
     if let Some(modal) = &mut self.modal {
       shade(grid, &theme.block, modal.unshaded());
       grid.cursor_pos = None;
@@ -356,6 +373,14 @@ impl App {
   fn frame(&self) -> Rect {
     let size = self.screen.size();
     Rect::new(0, 0, size.width, size.height)
+  }
+
+  /// Where the header bar is: gone while the task view is zoomed.
+  fn header_area(&self) -> Rect {
+    match self.state.view {
+      View::Git => self.frame().take_top(1),
+      View::Tasks => self.layout().header,
+    }
   }
 
   fn layout(&self) -> AppLayout {
@@ -616,16 +641,16 @@ impl App {
     // A selection dragged out of the terminal keeps driving it from the
     // nearest edge cell, so the kernel can scroll the view under it. The
     // release has to reach the kernel too, or the drag never ends.
-    let drag_outside =
-      matches!(
-        mouse.kind,
-        MouseEventKind::Drag(MouseButton::Left)
-          | MouseEventKind::Up(MouseButton::Left)
-      ) && matches!(self.state.scope, Scope::Term | Scope::TermZoom)
-        && self.state.drag.is_none()
-        && !term_area.contains(x, y)
-        && term_area.width > 0
-        && term_area.height > 0;
+    let drag_outside = matches!(
+      mouse.kind,
+      MouseEventKind::Drag(MouseButton::Left)
+        | MouseEventKind::Up(MouseButton::Left)
+    ) && self.state.view == View::Tasks
+      && matches!(self.state.scope, Scope::Term | Scope::TermZoom)
+      && self.state.drag.is_none()
+      && !term_area.contains(x, y)
+      && term_area.width > 0
+      && term_area.height > 0;
     if drag_outside {
       if let Some(task) = self.state.current_task() {
         let mut event = mouse;
@@ -636,10 +661,15 @@ impl App {
       }
       return;
     }
-    if layout.header.contains(x, y) {
+    if self.header_area().contains(x, y) {
       if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
         let hits = self.state.header;
-        if hits.logo.is_some_and(|hit| hit.contains(x, y)) {
+        let on = |hit: Option<Rect>| hit.is_some_and(|hit| hit.contains(x, y));
+        if on(hits.tasks) {
+          self.handle_action(Some(observer), Action::ShowTasks);
+        } else if on(hits.git) || on(hits.branch) {
+          self.handle_action(Some(observer), Action::ShowGit);
+        } else if hits.logo.is_some_and(|hit| hit.contains(x, y)) {
           self.handle_action(Some(observer), Action::ShowMainMenu);
         } else if hits.reload.is_some_and(|hit| hit.contains(x, y)) {
           self.handle_action(Some(observer), Action::ShowReload);
@@ -652,6 +682,10 @@ impl App {
           );
         }
       }
+      return;
+    }
+    if self.state.view == View::Git {
+      self.git_mouse(&mouse);
       return;
     }
     let pressed = match mouse.kind {
@@ -749,10 +783,32 @@ impl App {
       }
       Action::Command { command } => self.issue(command),
 
-      Action::ToggleFocus => self.state.scope = self.state.scope.toggle(),
-      Action::FocusTasks => self.state.scope = Scope::Tasks,
-      Action::FocusTerm => self.state.scope = Scope::Term,
-      Action::Zoom => self.state.scope = Scope::TermZoom,
+      Action::ToggleFocus => match self.state.view {
+        View::Tasks => self.state.scope = self.state.scope.toggle(),
+        View::Git => self.git_focus(self.state.git.focus.toggle()),
+      },
+      Action::FocusTasks => {
+        self.show_view(View::Tasks);
+        self.state.scope = Scope::Tasks;
+      }
+      Action::FocusTerm => {
+        self.show_view(View::Tasks);
+        self.state.scope = Scope::Term;
+      }
+      Action::Zoom => {
+        self.show_view(View::Tasks);
+        self.state.scope = Scope::TermZoom;
+      }
+
+      Action::ShowTasks => self.show_view(View::Tasks),
+      Action::ShowGit => self.show_view(View::Git),
+      Action::GitNext => self.git_step(1),
+      Action::GitPrev => self.git_step(-1),
+      Action::GitFocusFiles => self.git_focus(GitFocus::Files),
+      Action::GitFocusDiff => self.git_focus(GitFocus::Diff),
+      Action::GitScrollLeft => self.git_scroll_sideways(false),
+      Action::GitScrollRight => self.git_scroll_sideways(true),
+      Action::GitFetch => self.git_fetch(true),
 
       Action::ShowCommandsMenu => {
         self.open(Box::new(CommandsMenuModal::new()));
@@ -913,6 +969,12 @@ impl App {
       }
       Action::ShowRemoveTask => self.show_remove(),
 
+      Action::ScrollUp { n, unit } | Action::ScrollDown { n, unit }
+        if self.state.view == View::Git =>
+      {
+        let up = matches!(action, Action::ScrollUp { .. });
+        self.git_scroll(up, n, unit);
+      }
       Action::ScrollUp { n, unit } => {
         self.send_current(
           current,
@@ -1072,7 +1134,10 @@ impl App {
       return;
     };
     let shown = self.state.current_task().map(|task| task.id);
-    if shown != Some(bar.task) || !self.state.scope.is_term() {
+    if shown != Some(bar.task)
+      || !self.state.scope.is_term()
+      || self.state.view != View::Tasks
+    {
       self.state.last_search = bar.input.value().to_string();
       self.state.search = None;
     }

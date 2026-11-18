@@ -16,6 +16,47 @@ pub struct Theme {
   pub palette: Palette,
   pub block: BlockTheme,
   pub tasks: TaskListTheme,
+  pub git: GitTheme,
+}
+
+/// The git view. Its panels are told apart by their backgrounds, each
+/// under a title bar, where the task view draws boxes.
+pub struct GitTheme {
+  /// Behind the diff.
+  pub bg: Rgb,
+  /// Behind the panels on the left.
+  pub surface: Rgb,
+  /// A panel's title bar.
+  pub bar: Rgb,
+  /// The hint line at the bottom.
+  pub raised: Rgb,
+  /// The selected row.
+  pub selected: Rgb,
+  /// A row or a button under the mouse.
+  pub hover: Rgb,
+  /// A button.
+  pub chip: Rgb,
+  pub text: Rgb,
+  /// Secondary text: labels, counts, a hunk's header.
+  pub dim: Rgb,
+  /// What recedes: a file's directory, line numbers.
+  pub faint: Rgb,
+  /// The line between the panels and the diff.
+  pub border: Rgb,
+  /// What has the focus, and the branch in the header.
+  pub accent: Rgb,
+  pub accent_bg: Rgb,
+  pub accent_fg: Rgb,
+  /// Lines and files added, and a branch level with its upstream.
+  pub add: Rgb,
+  pub add_bg: Rgb,
+  /// Lines and files removed, conflicts, and what failed.
+  pub del: Rgb,
+  pub del_bg: Rgb,
+  /// Files modified, and commits to pull.
+  pub warn: Rgb,
+  /// Files renamed, and files not in the repository yet.
+  pub info: Rgb,
 }
 
 pub struct BlockTheme {
@@ -140,6 +181,28 @@ impl Theme {
         done: Rgb(0x79, 0xc0, 0xff),
         failed: Rgb(0xff, 0xa1, 0x98),
       },
+      git: GitTheme {
+        bg: Rgb(0x0f, 0x11, 0x16),
+        surface: Rgb(0x17, 0x1a, 0x22),
+        bar: Rgb(0x20, 0x24, 0x2f),
+        raised: Rgb(0x28, 0x2d, 0x3a),
+        selected: Rgb(0x2d, 0x35, 0x52),
+        hover: Rgb(0x1e, 0x22, 0x2c),
+        chip: Rgb(0x2c, 0x32, 0x40),
+        text: Rgb(0xe4, 0xe7, 0xf0),
+        dim: Rgb(0x9d, 0xa4, 0xb5),
+        faint: Rgb(0x66, 0x6e, 0x80),
+        border: Rgb(0x3a, 0x40, 0x50),
+        accent: Rgb(0x8e, 0xa2, 0xff),
+        accent_bg: Rgb(0x2a, 0x33, 0x66),
+        accent_fg: Rgb(0xe3, 0xe7, 0xff),
+        add: Rgb(0x74, 0xd6, 0x95),
+        add_bg: Rgb(0x12, 0x26, 0x1a),
+        del: Rgb(0xf3, 0x8d, 0x8d),
+        del_bg: Rgb(0x2e, 0x17, 0x19),
+        warn: Rgb(0xe6, 0xbb, 0x62),
+        info: Rgb(0x62, 0xcb, 0xd9),
+      },
     }
   }
 
@@ -200,6 +263,28 @@ impl Theme {
         down: Rgb(0x59, 0x63, 0x6e),
         done: Rgb(0x09, 0x69, 0xda),
         failed: Rgb(0xd1, 0x24, 0x2f),
+      },
+      git: GitTheme {
+        bg: Rgb(0xff, 0xff, 0xff),
+        surface: Rgb(0xf3, 0xf4, 0xf8),
+        bar: Rgb(0xe8, 0xea, 0xf1),
+        raised: Rgb(0xdd, 0xe0, 0xe9),
+        selected: Rgb(0xd3, 0xd9, 0xf2),
+        hover: Rgb(0xe9, 0xeb, 0xf2),
+        chip: Rgb(0xdd, 0xe0, 0xe9),
+        text: Rgb(0x18, 0x1b, 0x24),
+        dim: Rgb(0x55, 0x5c, 0x6d),
+        faint: Rgb(0x92, 0x99, 0xa8),
+        border: Rgb(0xc5, 0xca, 0xd6),
+        accent: Rgb(0x3f, 0x50, 0xc8),
+        accent_bg: Rgb(0xdd, 0xe2, 0xfb),
+        accent_fg: Rgb(0x27, 0x34, 0x9a),
+        add: Rgb(0x17, 0x78, 0x3a),
+        add_bg: Rgb(0xe6, 0xf6, 0xea),
+        del: Rgb(0xbd, 0x32, 0x38),
+        del_bg: Rgb(0xfd, 0xea, 0xea),
+        warn: Rgb(0x8f, 0x5f, 0x07),
+        info: Rgb(0x0d, 0x74, 0x83),
       },
     }
   }

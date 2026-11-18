@@ -72,6 +72,8 @@ pub fn render_keymap(
       Action::SearchNext,
       Action::CopyModeLeave,
     ],
+    // The git view draws its own hints.
+    KeymapGroup::Git => &[],
   };
 
   for action in items {

@@ -6,6 +6,7 @@ mod config;
 mod console;
 pub mod dekit;
 mod error;
+mod git;
 mod help;
 mod js;
 mod kernel;

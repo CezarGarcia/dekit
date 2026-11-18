@@ -14,6 +14,7 @@ pub struct Keymap {
   tasks: Bindings,
   term: Bindings,
   copy: Bindings,
+  git: Bindings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +22,8 @@ pub enum KeymapGroup {
   Tasks,
   Term,
   Copy,
+  /// The git view, whichever of its panels has the focus.
+  Git,
 }
 
 impl Keymap {
@@ -33,6 +36,7 @@ impl Keymap {
       KeymapGroup::Tasks => &self.tasks,
       KeymapGroup::Term => &self.term,
       KeymapGroup::Copy => &self.copy,
+      KeymapGroup::Git => &self.git,
     }
   }
 
@@ -41,6 +45,7 @@ impl Keymap {
       KeymapGroup::Tasks => &mut self.tasks,
       KeymapGroup::Term => &mut self.term,
       KeymapGroup::Copy => &mut self.copy,
+      KeymapGroup::Git => &mut self.git,
     };
     bindings.by_key.insert(key.clone(), action.clone());
     bindings.by_action.insert(action, key);

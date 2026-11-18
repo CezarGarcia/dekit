@@ -5,8 +5,8 @@ use std::time::Instant;
 use tui_input::Input;
 
 use crate::console::{
-  keymap::KeymapGroup, task_tree::TaskTree, task_view::TaskView,
-  ui_header::HeaderHits,
+  git_view::GitView, keymap::KeymapGroup, task_tree::TaskTree,
+  task_view::TaskView, ui_header::HeaderHits,
 };
 use crate::kernel::{task::TaskId, task_path::TaskPath};
 use crate::term::grid::Rect;
@@ -44,7 +44,21 @@ impl Scope {
   }
 }
 
+/// What the console shows under its header.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum View {
+  /// The task list and the selected task's terminal.
+  #[default]
+  Tasks,
+  /// The project's git repository.
+  Git,
+}
+
 pub struct State {
+  pub view: View,
+  /// The git view, and what the header shows of the repository in
+  /// either view.
+  pub git: GitView,
   pub scope: Scope,
   pub tasks: TaskTree,
   pub hide_keymap_window: bool,
@@ -129,11 +143,34 @@ pub struct Drop {
 }
 
 impl State {
+  /// A console that was just opened: the task view, nothing selected.
+  pub fn new(tasks: TaskTree, hide_keymap_window: bool) -> Self {
+    State {
+      view: View::Tasks,
+      git: GitView::default(),
+      scope: Scope::Tasks,
+      tasks,
+      hide_keymap_window,
+      quitting: false,
+      header: Default::default(),
+      unsaved_hit: None,
+      hover: None,
+      toast: None,
+      config: ConfigStatus::default(),
+      drag: None,
+      search: None,
+      last_search: String::new(),
+    }
+  }
+
   pub fn current_task(&self) -> Option<&TaskView> {
     self.tasks.current()
   }
 
   pub fn keymap_group(&self) -> KeymapGroup {
+    if self.view == View::Git {
+      return KeymapGroup::Git;
+    }
     match self.scope {
       Scope::Tasks => KeymapGroup::Tasks,
       Scope::Term | Scope::TermZoom => match self.current_task() {

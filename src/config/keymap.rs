@@ -11,6 +11,7 @@ pub struct KeymapConfig {
   keymap_tasks: IndexMap<Key, Action>,
   keymap_term: IndexMap<Key, Action>,
   keymap_copy: IndexMap<Key, Action>,
+  keymap_git: IndexMap<Key, Action>,
 }
 
 impl Default for KeymapConfig {
@@ -19,6 +20,7 @@ impl Default for KeymapConfig {
       keymap_tasks: Default::default(),
       keymap_term: Default::default(),
       keymap_copy: Default::default(),
+      keymap_git: Default::default(),
     };
     settings.add_defaults();
     settings
@@ -31,7 +33,7 @@ impl KeymapConfig {
       Some(node) => node.as_obj()?,
       None => return Ok(()),
     };
-    keymap.known_keys(&["tasks", "term", "term_copy"])?;
+    keymap.known_keys(&["tasks", "term", "term_copy", "git"])?;
     if let Some(tasks) = keymap.get("tasks") {
       add_keys(&mut self.keymap_tasks, &tasks)?;
     }
@@ -40,6 +42,9 @@ impl KeymapConfig {
     }
     if let Some(copy) = keymap.get("term_copy") {
       add_keys(&mut self.keymap_copy, &copy)?;
+    }
+    if let Some(git) = keymap.get("git") {
+      add_keys(&mut self.keymap_git, &git)?;
     }
     Ok(())
   }
@@ -52,6 +57,7 @@ impl KeymapConfig {
       KeymapGroup::Tasks => &mut self.keymap_tasks,
       KeymapGroup::Term => &mut self.keymap_term,
       KeymapGroup::Copy => &mut self.keymap_copy,
+      KeymapGroup::Git => &mut self.keymap_git,
     }
   }
 
@@ -257,6 +263,75 @@ impl KeymapConfig {
         },
       );
     }
+
+    // The views. The digits are free in the task list, where `<M-1>`
+    // and on select a task.
+    for map in [&mut s.keymap_tasks, &mut s.keymap_git] {
+      map.insert(KeyCode::Char('1').into(), Action::ShowTasks);
+      map.insert(KeyCode::Char('2').into(), Action::ShowGit);
+    }
+    s.add_git_defaults();
+  }
+
+  /// The git view's keys. What also works in the task list has the key
+  /// it has there.
+  fn add_git_defaults(&mut self) {
+    let mut add = |key: Key, action: Action| {
+      self.keymap_git.insert(key, action);
+    };
+    // `<C-a>` goes last: it is the key the hints show, as in the task
+    // list.
+    add(KeyCode::Tab.into(), Action::ToggleFocus);
+    add(
+      Key::new(KeyCode::Char('a'), KeyMods::CONTROL),
+      Action::ToggleFocus,
+    );
+    add(KeyCode::Char('q').into(), Action::ShowQuit);
+    add(KeyCode::Char('Q').into(), Action::Down);
+    add(KeyCode::Char('p').into(), Action::ShowCommandsMenu);
+    add(
+      KeyCode::Char('P').into(),
+      Action::ShowRunnerSelect {
+        tab: RunnerTab::Switch,
+      },
+    );
+    add(KeyCode::Char('?').into(), Action::ToggleKeymapWindow);
+    #[cfg(debug_assertions)]
+    add(KeyCode::Char('T').into(), Action::ToggleTheme);
+
+    for code in [KeyCode::Down, KeyCode::Char('j')] {
+      add(code.into(), Action::GitNext);
+    }
+    for code in [KeyCode::Up, KeyCode::Char('k')] {
+      add(code.into(), Action::GitPrev);
+    }
+    for code in [KeyCode::Esc, KeyCode::Left, KeyCode::Char('h')] {
+      add(code.into(), Action::GitFocusFiles);
+    }
+    for code in [KeyCode::Enter, KeyCode::Right, KeyCode::Char('l')] {
+      add(code.into(), Action::GitFocusDiff);
+    }
+    add(KeyCode::Char('H').into(), Action::GitScrollLeft);
+    add(KeyCode::Char('L').into(), Action::GitScrollRight);
+    add(KeyCode::Char('f').into(), Action::GitFetch);
+
+    let ctrl = |c: char| Key::new(KeyCode::Char(c), KeyMods::CONTROL);
+    let scroll = |up: bool, n: usize, unit: ScrollUnit| {
+      if up {
+        Action::ScrollUp { n, unit }
+      } else {
+        Action::ScrollDown { n, unit }
+      }
+    };
+    add(ctrl('y'), scroll(true, 3, ScrollUnit::Line));
+    add(ctrl('e'), scroll(false, 3, ScrollUnit::Line));
+    add(ctrl('u'), scroll(true, 1, ScrollUnit::HalfScreen));
+    add(ctrl('d'), scroll(false, 1, ScrollUnit::HalfScreen));
+    add(KeyCode::PageUp.into(), scroll(true, 1, ScrollUnit::Screen));
+    add(
+      KeyCode::PageDown.into(),
+      scroll(false, 1, ScrollUnit::Screen),
+    );
   }
 
   fn keymap_add_p(&mut self, key: Key, event: Action) {
@@ -282,6 +357,9 @@ impl KeymapConfig {
     }
     for (key, event) in &self.keymap_copy {
       keymap.bind(KeymapGroup::Copy, key.clone(), event.clone());
+    }
+    for (key, event) in &self.keymap_git {
+      keymap.bind(KeymapGroup::Git, key.clone(), event.clone());
     }
     keymap
   }

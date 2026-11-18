@@ -27,6 +27,28 @@ and `N` go on, `v` starts a selection, and `<Esc>` again leaves copy
 mode. The bar opens again with the last query, selected, so typing
 replaces it.
 
+When the project is in a git repository, the header has a tab for each
+of the console's two views, `Tasks` and `Git`, and names the checked-out
+branch with how it stands with its upstream: `↑2 ↓3` is two commits to
+push and three to pull, `✓` is level. `<2>` or a click on the tab or the
+branch shows the git view, and `<1>` goes back to the tasks.
+
+The git view has the branch and the changed files on the left, staged
+and not, each with the lines it adds and removes, and the selected
+file's diff on the right. `<j>` and `<k>` select a file; `<C-a>` or
+`<Tab>` moves the focus to the diff, where the same keys scroll it, as
+do `<C-d>`, `<C-u>`, and the mouse wheel; `<H>` and `<L>` scroll it
+sideways. It keeps up with the repository by itself: a commit, a
+checkout, or a `git add` from anywhere shows at once, and an edit to a
+file within two seconds. It only reads: nothing in it changes the
+working tree or the index.
+
+The console also fetches from the remote now and then while someone is
+attached, so that what there is to pull is true; `<f>` fetches now, and
+`tui.git.fetch_every` sets how often, or `off` (|config/user|). A fetch
+never asks for a password: the runner has no terminal to ask on, so one
+that needs it fails, and the branch panel says why.
+
 The runner is started if it is not running, with no tasks (|cli/up|
 starts them); `--no-start` fails instead. In the console, `q` asks how
 to quit: `q` again stops the runner like |cli/down|, `x` stops it

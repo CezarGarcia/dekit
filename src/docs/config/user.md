@@ -46,6 +46,10 @@ keymap:
   type: auto | dark | light
   default: auto
   desc: Console colors. `auto` follows the terminal's background (asked with OSC 11, else `COLORFGBG`), and is dark when neither says.
+- key: tui.git.fetch_every
+  type: duration | off
+  default: 5m
+  desc: How often the console fetches from the git remote while someone is attached, so that the commits to pull are counted right. `off` leaves fetching to you.
 :::
 
 ## Agent
@@ -64,8 +68,9 @@ config reads back as asked (|start/runners|).
 
 ## Keymap
 
-`keymap` has three groups: `tasks` when the task list has focus, `term`
-when the task's terminal has focus, and `term_copy` in copy mode. Each
+`keymap` has four groups: `tasks` when the task list has focus, `term`
+when the task's terminal has focus, `term_copy` in copy mode, and `git`
+in the git view. Each
 maps a key to an action: a name, or an object with `action` and its
 fields. `null` removes a binding, and `reset: true` drops a group's
 defaults. Keys look like `<q>`, `<C-a>`, `<M-1>`, `<Down>`, `<F5>`.
@@ -111,6 +116,8 @@ Default bindings in `tasks`:
   desc: search, the selected task's output (|cli/attach|)
 - cmd: <?>
   desc: toggle-keymap-window
+- cmd: <1>, <2>
+  desc: show-tasks, show-git, the console's two views (|cli/attach|)
 - cmd: <C-c>
   desc: "send-key {key: <C-c>}, to the task"
 - cmd: <C-y>, <C-e>
@@ -137,6 +144,14 @@ directory, `{action: switch-runner, kind: project, root: /abs/path}` to
 move the attachment to another runner's console, and
 `{action: command, command: {...}}` to run any command from
 |config/hooks|.
+
+In `git`: `<1>` show-tasks, `<j>` `<Down>` git-next and `<k>` `<Up>`
+git-prev (the next change and the one before, or a line of the diff
+while it has the focus), `<C-a>` `<Tab>` toggle-focus, `<Enter>` `<l>`
+`<Right>` git-focus-diff, `<Esc>` `<h>` `<Left>` git-focus-files, `<H>`
+git-scroll-left, `<L>` git-scroll-right, `<f>` git-fetch, the same
+scroll keys for the diff, and `<q>`, `<Q>`, `<p>`, `<P>`, `<?>` as in
+`tasks`.
 
 `fold` opens, closes, or toggles groups: `{action: fold, op: close}`
 closes the selected group, or the one the selected task is in, and
