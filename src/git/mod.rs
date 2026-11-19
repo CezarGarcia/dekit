@@ -607,6 +607,9 @@ mod tests {
     let dir = TempDir::new(name);
     let root = &dir.0;
     run(root, &["init", "--quiet"]);
+    // Files come back from git as they went in, on Windows too, where
+    // git's own default turns their line ends into CRLF.
+    run(root, &["config", "core.autocrlf", "false"]);
     std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
     std::fs::write(root.join("old.txt"), "bye\n").unwrap();
     run(root, &["add", "."]);
