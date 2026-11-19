@@ -14,8 +14,12 @@
     $Version = if ($env:DEKIT_VERSION) { $env:DEKIT_VERSION } else { "latest" }
     $InstallDir = if ($env:DEKIT_INSTALL_DIR) { $env:DEKIT_INSTALL_DIR } else { Join-Path $HOME ".local\bin" }
 
-    $Cpu = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-    if ($Cpu -ne "X64" -and $Cpu -ne "Arm64") {
+    # The machine's CPU, as Windows tells every process; the second
+    # variable is set for a 32-bit PowerShell on a 64-bit Windows. .NET's
+    # RuntimeInformation would say too, but in an interactive Windows
+    # PowerShell the type of that name can be one without OSArchitecture.
+    $Cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    if ($Cpu -ne "AMD64" -and $Cpu -ne "ARM64") {
         throw "dekit: unsupported CPU: $Cpu"
     }
     # Arm64 runs the x64 build under Windows' emulation.
@@ -98,7 +102,8 @@
             $Slashes = [char[]]"\/"
             $Dir = $InstallDir.TrimEnd($Slashes)
             $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-            $Entries = @($UserPath -split ";" | ForEach-Object { $_.TrimEnd($Slashes) })
+            # As text: an account without a Path of its own has none to split.
+            $Entries = @("$UserPath" -split ";" | ForEach-Object { "$_".TrimEnd($Slashes) })
             if ($Entries -notcontains $Dir) {
                 $NewPath = if ($UserPath) { "$UserPath;$InstallDir" } else { $InstallDir }
                 # This also tells running programs that the environment changed.
