@@ -232,6 +232,16 @@ fn menu_items() -> Vec<MenuItem> {
     Action::GitFocusDiff,
     Action::GitScrollLeft,
     Action::GitScrollRight,
+    Action::GitStage,
+    Action::GitStageAll,
+    Action::GitDiscard,
+    Action::GitFocusMessage,
+    Action::GitCommit,
+    Action::GitCommitPush,
+    Action::GitAmend,
+    Action::GitPull,
+    Action::GitPush,
+    Action::GitShowSync,
   ];
   actions
     .into_iter()

@@ -14,6 +14,8 @@ pub enum ModalResult {
   ApplyReload(Box<crate::reload::Plan>),
   /// Close the modal and write the changes back.
   WriteBack(Box<crate::write_back::WritePlan>, crate::write_back::How),
+  /// Close the modal and do what it asked about in the git view.
+  Git(crate::console::git_view::GitDo),
 }
 
 /// Commands a modal issued, one of which failed.

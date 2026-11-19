@@ -1,8 +1,12 @@
 //! The git view's state: the repository as last read, the change
-//! selected in it, and where the diff is scrolled to. Reading the
-//! repository is the console's (`app_git`); drawing it is `ui_git`.
+//! selected in it, where the diff is scrolled to, and the commit message
+//! being typed. Reading and changing the repository is the console's
+//! (`app_git`); drawing it is `ui_git`.
 
-use crate::git::{Diff, FileChange, FileKey, Read, Snapshot};
+use std::time::Instant;
+
+use crate::console::widgets::text_area::TextArea;
+use crate::git::{Area, Diff, FileChange, FileKey, Read, Snapshot};
 use crate::term::grid::Rect;
 
 /// Which panel the keys go to.
@@ -11,15 +15,53 @@ pub enum GitFocus {
   #[default]
   Files,
   Diff,
+  /// The commit message: every key is typed into it.
+  Message,
 }
 
 impl GitFocus {
+  /// Between the changes and the diff; out of the message to the
+  /// changes.
   pub fn toggle(self) -> Self {
     match self {
       GitFocus::Files => GitFocus::Diff,
-      GitFocus::Diff => GitFocus::Files,
+      GitFocus::Diff | GitFocus::Message => GitFocus::Files,
     }
   }
+}
+
+/// A pull or a push under way, as a task of the runner.
+pub struct Syncing {
+  /// `pull` or `push`.
+  pub what: &'static str,
+  /// The task's path.
+  pub path: String,
+  pub since: Instant,
+}
+
+/// What a dialog of the git view asks the console to do once the user
+/// said yes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GitDo {
+  /// Throw the change away.
+  Discard(FileKey),
+  /// Amend although the commit is on the remote already.
+  Amend {
+    push: bool,
+  },
+  Pull(PullHow),
+}
+
+/// How a pull brings in what the remote has.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PullHow {
+  /// As the user's git config says.
+  AsConfigured,
+  /// The commits here go on top of the remote's; changes not committed
+  /// are set aside meanwhile.
+  Rebase,
+  /// A merge commit joins the two.
+  Merge,
 }
 
 #[derive(Default)]
@@ -46,6 +88,16 @@ pub struct GitView {
   pub fetching: bool,
   /// Why the last fetch failed.
   pub fetch_error: Option<String>,
+  /// The commit message being typed.
+  pub message: TextArea,
+  /// The next commit replaces the last one.
+  pub amend: bool,
+  /// A commit is being made.
+  pub committing: bool,
+  pub syncing: Option<Syncing>,
+  /// The change to select once it is read: the one after a change that
+  /// was just staged, so that the next key acts on the next file.
+  pub select_next: Option<FileKey>,
   pub hits: GitHits,
 }
 
@@ -54,7 +106,18 @@ pub struct GitView {
 pub struct GitHits {
   /// Each change's row, with its place in the snapshot's files.
   pub rows: Vec<(Rect, usize)>,
+  /// Each change's checkbox: a click stages it, or takes it back.
+  pub checks: Vec<(Rect, usize)>,
+  /// What stages or unstages a whole group.
+  pub groups: Vec<(Rect, Area)>,
   pub fetch: Option<Rect>,
+  pub pull: Option<Rect>,
+  pub push: Option<Rect>,
+  /// The commit message's field, and how wide its text is.
+  pub message: Option<Rect>,
+  pub commit: Option<Rect>,
+  pub commit_push: Option<Rect>,
+  pub amend: Option<Rect>,
   /// The panels on the left.
   pub side: Rect,
   /// The diff's lines.
@@ -102,8 +165,13 @@ impl GitView {
   /// same file where it is now (staged since, or not any more), or what
   /// took its place in the list. True when it moved.
   fn reselect(&mut self) -> bool {
+    let next = self.select_next.take();
     let files = self.files();
+    let wanted = next
+      .as_ref()
+      .and_then(|key| files.iter().position(|file| file.key() == *key));
     let at = match &self.selected {
+      _ if wanted.is_some() => wanted,
       Some(key) => files
         .iter()
         .position(|file| file.key() == *key)
@@ -139,6 +207,28 @@ impl GitView {
     true
   }
 
+  /// Where the selected change is in the files.
+  pub fn selected_index(&self) -> Option<usize> {
+    self.selected.as_ref().map(|_| self.selected_at)
+  }
+
+  pub fn selected_file(&self) -> Option<&FileChange> {
+    self.selected_index().and_then(|at| self.files().get(at))
+  }
+
+  /// The change after the one `at` in its group, or the one before it
+  /// when it is the last: what takes its place once it leaves the group.
+  pub fn neighbour(&self, at: usize) -> Option<FileKey> {
+    let files = self.files();
+    let area = files.get(at)?.area;
+    let same = |file: &&FileChange| file.area == area;
+    files
+      .get(at + 1)
+      .filter(same)
+      .or_else(|| at.checked_sub(1).and_then(|at| files.get(at)).filter(same))
+      .map(FileChange::key)
+  }
+
   /// Moves the selection by `by` changes, stopping at the ends. True
   /// when it moved.
   pub fn step(&mut self, by: isize) -> bool {
@@ -171,7 +261,7 @@ mod tests {
   use std::path::PathBuf;
 
   use super::*;
-  use crate::git::{Area, DiffLine, Head, Kind, Repo};
+  use crate::git::{DiffLine, Head, Kind, Repo};
 
   fn change(path: &str, area: Area) -> FileChange {
     FileChange {
@@ -196,6 +286,7 @@ mod tests {
       files,
       fetched: None,
       has_remote: false,
+      remote: None,
       doing: None,
     }
   }
@@ -253,6 +344,35 @@ mod tests {
     assert_eq!(view.selected, None);
     view.take(Read::default());
     assert!(view.snapshot.is_none());
+  }
+
+  /// After a change is staged the selection goes to what was next to
+  /// it, not along with it.
+  #[test]
+  fn the_selection_can_be_sent_to_the_next_change() {
+    let mut view = GitView::default();
+    view.take(read(vec![
+      change("s", Area::Staged),
+      change("a", Area::Unstaged),
+      change("b", Area::Unstaged),
+    ]));
+    let key = |path: &str| FileKey {
+      path: path.to_string(),
+      area: Area::Unstaged,
+    };
+    assert_eq!(view.neighbour(1), Some(key("b")));
+    assert_eq!(view.neighbour(2), Some(key("a")), "the last of its group");
+    assert_eq!(view.neighbour(0), None, "alone in its group");
+    view.select(1);
+    view.select_next = view.neighbour(1);
+    view.take(read(vec![
+      change("s", Area::Staged),
+      change("a", Area::Staged),
+      change("b", Area::Unstaged),
+    ]));
+    assert_eq!(selected(&view), Some(("b", Area::Unstaged)));
+    assert_eq!(view.select_next, None);
+    assert_eq!(view.selected_file().map(|f| f.path.as_str()), Some("b"));
   }
 
   /// A diff read for a change that is not selected any more is not

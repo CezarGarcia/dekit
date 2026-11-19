@@ -149,9 +149,13 @@ In `git`: `<1>` show-tasks, `<j>` `<Down>` git-next and `<k>` `<Up>`
 git-prev (the next change and the one before, or a line of the diff
 while it has the focus), `<C-a>` `<Tab>` toggle-focus, `<Enter>` `<l>`
 `<Right>` git-focus-diff, `<Esc>` `<h>` `<Left>` git-focus-files, `<H>`
-git-scroll-left, `<L>` git-scroll-right, `<f>` git-fetch, the same
-scroll keys for the diff, and `<q>`, `<Q>`, `<p>`, `<P>`, `<?>` as in
-`tasks`.
+git-scroll-left, `<L>` git-scroll-right, `<Space>` git-stage, `<a>`
+git-stage-all, `<d>` git-discard, `<m>` show-git-menu, `<c>`
+git-focus-message, `<A>` git-amend, `<f>` git-fetch, `<p>` git-pull,
+`<P>` git-push, `<o>` git-show-sync (the terminal of the pull or push
+under way), the same scroll keys for the diff, and `<q>`, `<Q>`, `<?>`
+as in `tasks`. git-commit and git-commit-push have no key: while the
+message is typed every key goes into it, and `<M-Enter>` commits.
 
 `fold` opens, closes, or toggles groups: `{action: fold, op: close}`
 closes the selected group, or the one the selected task is in, and

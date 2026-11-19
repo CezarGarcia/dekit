@@ -1,6 +1,6 @@
-//! Draws the git view: the branch and the changes on the left, each
-//! panel under its title bar, and the selected change's diff on the
-//! right.
+//! Draws the git view: the branch, the changes, and the commit on the
+//! left, each panel under its title bar, and the selected change's diff
+//! on the right.
 
 use std::time::{Duration, SystemTime};
 
@@ -25,6 +25,11 @@ use crate::term::{
 const NARROW: u16 = 72;
 /// Rows of the branch panel under its title bar.
 const BRANCH_ROWS: u16 = 5;
+/// Rows of the commit panel, its title bar included.
+const COMMIT_ROWS: u16 = 8;
+/// How long a pull or a push runs before the panel says how to get to
+/// its terminal: by then it is likely waiting for a password.
+const SLOW_SYNC: Duration = Duration::from_secs(3);
 /// How far a button's background moves toward the text color under the
 /// mouse.
 const HOVER: u8 = 28;
@@ -163,7 +168,7 @@ pub fn render_git(
 
   let single = body.width < NARROW;
   let side_width = match (single, git.focus) {
-    (true, GitFocus::Files) => body.width,
+    (true, GitFocus::Files | GitFocus::Message) => body.width,
     (true, GitFocus::Diff) => 0,
     (false, _) => (u32::from(body.width) * 36 / 100).clamp(34, 50) as u16,
   };
@@ -180,14 +185,17 @@ pub fn render_git(
   git.scroll = git.scroll.min(lines.saturating_sub(page));
 
   let mut hits = GitHits::default();
+  let mut cursor = None;
   if side.width > 0 && side.height > 0 {
     hits.side = side;
-    git.list_top = render_side(side, grid, git, &mut hits, hover, t, now);
+    (git.list_top, cursor) =
+      render_side(side, grid, git, &mut hits, hover, t, now);
   }
   if main.width > 0 && main.height > 0 {
     render_diff(main, grid, git, &mut hits, t);
   }
   git.hits = hits;
+  grid.cursor_pos = cursor;
 
   render_hints(hints, grid, git.focus, keymap, t);
 
@@ -213,8 +221,9 @@ pub fn render_git(
   }
 }
 
-/// The branch panel over the list of changes. Returns the list's first
-/// row shown, moved to keep the selected change on screen.
+/// The panels on the left: the branch, the changes, and the commit.
+/// Returns the list's first row shown, moved to keep the selected change
+/// on screen, and where the cursor is while the message is typed.
 fn render_side(
   mut area: Rect,
   grid: &mut Grid,
@@ -223,7 +232,7 @@ fn render_side(
   hover: Option<(u16, u16)>,
   t: &GitTheme,
   now: SystemTime,
-) -> usize {
+) -> (usize, Option<Pos>) {
   let base = on(t.surface, t.text);
   let dim = on(t.surface, t.dim);
   grid.fill_area(area, ' ', base);
@@ -238,28 +247,44 @@ fn render_side(
     for (row, line) in area.inner((1, 2)).rows().zip(&lines) {
       grid.draw_text(row, line, dim);
     }
-    return 0;
+    return (0, None);
   };
 
-  let mut branch = area.take_top(BRANCH_ROWS).inner((1, 1, 1, 2));
+  let mut branch = area.take_top(BRANCH_ROWS).inner((1, 1, 0, 2));
   render_branch(&mut branch, grid, git, snapshot, hits, hover, t, now);
 
-  let files = &snapshot.files;
-  let mut bar = title_bar(
-    grid,
-    area.take_top(1),
-    "CHANGES",
-    git.focus == GitFocus::Files,
-    t,
-  );
-  if !files.is_empty() {
-    let count = format!("{} ", files.len());
-    grid.draw_text(
-      bar.take_right(count.width() as u16),
-      &count,
-      on(t.bar, t.dim),
-    );
+  // The commit panel keeps its place at the bottom while the list has
+  // a few rows left; with less room it shows only while it is typed in.
+  let commit_rows = if area.height >= COMMIT_ROWS + 5 {
+    COMMIT_ROWS
+  } else if git.focus == GitFocus::Message {
+    COMMIT_ROWS.min(area.height)
+  } else {
+    0
+  };
+  let commit = area.take_bottom(commit_rows);
+  let top = render_changes(area, grid, git, snapshot, hits, hover, t);
+  let cursor = render_commit(commit, grid, git, snapshot, hits, hover, t);
+  (top, cursor)
+}
+
+/// The list of changes under its bar: each group under its name, a
+/// blank row between them. Returns the first row shown.
+fn render_changes(
+  mut area: Rect,
+  grid: &mut Grid,
+  git: &GitView,
+  snapshot: &Snapshot,
+  hits: &mut GitHits,
+  hover: Option<(u16, u16)>,
+  t: &GitTheme,
+) -> usize {
+  if area.height == 0 {
+    return git.list_top;
   }
+  let files = &snapshot.files;
+  let focused = git.focus == GitFocus::Files;
+  let mut bar = title_bar(grid, area.take_top(1), "CHANGES", focused, t);
   if files.is_empty() {
     let mut text = area.inner((1, 2));
     grid.draw_text(
@@ -269,26 +294,31 @@ fn render_side(
     );
     return 0;
   }
+  let count = format!("{} ", files.len());
+  grid.draw_text(
+    bar.take_right(count.width() as u16),
+    &count,
+    on(t.bar, t.dim),
+  );
 
-  // The list: each group under its name, a blank row between them.
   enum Row {
     Gap,
-    Group(&'static str, usize, Rgb),
+    Group(&'static str, usize, Area),
     File(usize),
   }
   let mut rows = vec![Row::Gap];
   let mut selected_row = None;
-  for (label, area_of, color) in [
-    ("Conflicts", Area::Conflict, t.del),
-    ("Staged", Area::Staged, t.dim),
-    ("Unstaged", Area::Unstaged, t.dim),
+  for (label, area_of) in [
+    ("Conflicts", Area::Conflict),
+    ("Staged", Area::Staged),
+    ("Unstaged", Area::Unstaged),
   ] {
     let of_area = files.iter().enumerate().filter(|(_, f)| f.area == area_of);
     let count = of_area.clone().count();
     if count == 0 {
       continue;
     }
-    rows.push(Row::Group(label, count, color));
+    rows.push(Row::Group(label, count, area_of));
     for (at, file) in of_area {
       if git.selected.as_ref() == Some(&file.key()) {
         selected_row = Some(rows.len());
@@ -315,45 +345,106 @@ fn render_side(
   let added_width = files.iter().map(|f| width_of(f.added)).max().unwrap_or(0);
   let removed_width =
     files.iter().map(|f| width_of(f.removed)).max().unwrap_or(0);
-  let focused = git.focus == GitFocus::Files;
+  let over = |hit: Rect| hover.is_some_and(|(x, y)| hit.contains(x, y));
   for (row, line) in rows.iter().skip(top).zip(area.rows()) {
     match row {
       Row::Gap => (),
-      Row::Group(label, count, color) => {
+      Row::Group(label, count, area_of) => {
         let mut line = line.inner((0, 1, 0, 2));
+        // Everything in the group at once, at the right.
+        let all = match area_of {
+          Area::Staged => "unstage all",
+          Area::Unstaged => "stage all",
+          Area::Conflict => "",
+        };
+        if !all.is_empty()
+          && all.width() + label.width() + 6 < line.width as usize
+        {
+          let hit = line.take_right(all.width() as u16);
+          let color = if over(hit) { t.text } else { t.dim };
+          let link = on(t.surface, color).set_underlined(true);
+          grid.draw_text(hit, all, link);
+          hits.groups.push((hit, *area_of));
+        }
+        let color = match area_of {
+          Area::Conflict => t.del,
+          Area::Staged | Area::Unstaged => t.dim,
+        };
         let label_area = line.take_left(label.width() as u16 + 1);
-        grid.draw_text(label_area, label, on(t.surface, *color).set_bold(true));
+        grid.draw_text(label_area, label, on(t.surface, color).set_bold(true));
         grid.draw_text(line, &count.to_string(), on(t.surface, t.faint));
       }
       Row::File(at) => {
         let file = &files[*at];
         let selected = git.selected.as_ref() == Some(&file.key());
-        let hovered = hover.is_some_and(|(x, y)| line.contains(x, y));
         let bg = if selected {
           t.selected
-        } else if hovered {
+        } else if over(line) {
           t.hover
         } else {
           t.surface
         };
         hits.rows.push((line, *at));
-        render_file(
+        let check = render_file(
           line,
           grid,
           file,
           bg,
           selected.then_some(focused),
           (added_width, removed_width),
+          hover,
           t,
         );
+        hits.checks.push((check, *at));
       }
     }
   }
   top
 }
 
-/// The checked-out branch, how it stands with its upstream, and the
-/// fetch.
+/// A button of the git view. `primary` is what there is to do now;
+/// `enabled` false is one that does nothing for the moment.
+fn button(
+  grid: &mut Grid,
+  line: &mut Rect,
+  label: &str,
+  primary: bool,
+  enabled: bool,
+  hover: Option<(u16, u16)>,
+  t: &GitTheme,
+) -> Option<Rect> {
+  let caption = format!(" {label} ");
+  if caption.width() > usize::from(line.width) {
+    return None;
+  }
+  let hit = line.take_left(caption.width() as u16);
+  line.take_left(1);
+  let over = hover.is_some_and(|(x, y)| hit.contains(x, y));
+  let style = match (enabled, primary) {
+    (false, _) => on(t.chip, t.faint),
+    (true, true) => {
+      let bg = if over {
+        t.accent.blend(t.text, HOVER)
+      } else {
+        t.accent
+      };
+      on(bg, t.bg).set_bold(true)
+    }
+    (true, false) => {
+      let bg = if over {
+        t.chip.blend(t.text, HOVER)
+      } else {
+        t.chip
+      };
+      on(bg, t.text)
+    }
+  };
+  grid.draw_text(hit, &caption, style);
+  Some(hit)
+}
+
+/// The checked-out branch, how it stands with its upstream, and what
+/// brings the two level: fetch, pull, push.
 #[allow(clippy::too_many_arguments)]
 fn render_branch(
   area: &mut Rect,
@@ -367,9 +458,12 @@ fn render_branch(
 ) {
   let paint = |fg: Rgb| on(t.surface, fg);
 
-  // When it was last fetched, at the right; the name gets the rest.
+  // What is going on with the remote, at the right; the name gets the
+  // rest.
   let mut line = area.take_top(1);
-  let (fetched, color) = if git.fetching {
+  let (remote, color) = if let Some(syncing) = &git.syncing {
+    (format!("{}ing…", syncing.what), t.accent)
+  } else if git.fetching {
     ("fetching…".to_string(), t.accent)
   } else if git.fetch_error.is_some() {
     ("fetch failed".to_string(), t.del)
@@ -383,9 +477,9 @@ fn render_branch(
     }
   };
   let name = head_name(&snapshot.head);
-  if name.width() + fetched.width() + 2 <= usize::from(line.width) {
-    let at = line.take_right(fetched.width() as u16);
-    grid.draw_text(at, &fetched, paint(color));
+  if name.width() + remote.width() + 2 <= usize::from(line.width) {
+    let at = line.take_right(remote.width() as u16);
+    grid.draw_text(at, &remote, paint(color));
     line.take_right(2);
   }
   let name = fit(&name, line.width);
@@ -402,20 +496,27 @@ fn render_branch(
     grid.draw_text(line.take_left(text.width() as u16), &text, paint(color));
     line.take_left(3);
   };
+  // What a pull and a push would do, for the buttons.
+  let (mut to_pull, mut to_push) = (false, false);
+  let on_branch = matches!(snapshot.head, Head::Branch(_));
   match (&snapshot.head, &snapshot.upstream) {
     (Head::Unborn(_), _) => say("No commits yet", t.dim),
     (Head::Detached(_), _) => say("Not on a branch", t.dim),
     (Head::Branch(_), None) if snapshot.has_remote => {
+      to_push = true;
       say("Not published yet", t.warn)
     }
     (Head::Branch(_), None) => say("No remote to compare with", t.dim),
     (Head::Branch(_), Some(upstream)) => {
       let name = clean(&upstream.name);
       if upstream.gone {
+        to_push = true;
         say(&format!("{name} is gone from the remote"), t.del);
       } else if upstream.ahead == 0 && upstream.behind == 0 {
         say(&format!("✓ Up to date with {name}"), t.add);
       } else {
+        to_pull = upstream.behind > 0;
+        to_push = upstream.behind == 0;
         if upstream.ahead > 0 {
           say(&format!("↑{} to push", upstream.ahead), t.text);
         }
@@ -430,24 +531,42 @@ fn render_branch(
     return;
   }
   let mut line = area.take_top(1);
-  let label = " ↻ Fetch ";
-  let hit = line.take_left(label.width() as u16);
-  let mut bg = t.chip;
-  if hover.is_some_and(|(x, y)| hit.contains(x, y)) && !git.fetching {
-    bg = bg.blend(t.text, HOVER);
+  let idle = git.syncing.is_none();
+  hits.fetch = button(
+    grid,
+    &mut line,
+    "↻ Fetch",
+    false,
+    !git.fetching && idle,
+    hover,
+    t,
+  );
+  if on_branch {
+    let published = snapshot.upstream.as_ref().is_some_and(|up| !up.gone);
+    if published {
+      hits.pull = button(grid, &mut line, "↓ Pull", to_pull, idle, hover, t);
+    }
+    let push = if published { "↑ Push" } else { "↑ Publish" };
+    hits.push = button(grid, &mut line, push, to_push, idle, hover, t);
   }
-  let fg = if git.fetching { t.faint } else { t.text };
-  grid.draw_text(hit, label, on(bg, fg));
-  hits.fetch = Some(hit);
-  if let Some(error) = &git.fetch_error {
-    line.take_left(2);
+
+  // Under the buttons: what needs saying about them.
+  let line = area.take_top(1);
+  if let Some(syncing) = &git.syncing {
+    if syncing.since.elapsed() >= SLOW_SYNC {
+      let text = format!("Still {}ing: o shows its terminal", syncing.what);
+      grid.draw_text(line, &fit(&text, line.width), paint(t.warn));
+    }
+  } else if let Some(error) = &git.fetch_error {
     grid.draw_text(line, &fit(error, line.width), paint(t.del));
   }
 }
 
-/// One change: its letter, the file's name with its directory receding
-/// beside it, and the lines added and removed, each in its column.
-/// `selected` says whether the list has the focus, for the selected row.
+/// One change: its checkbox, its letter, the file's name with its
+/// directory receding beside it, and the lines added and removed, each
+/// in its column. `selected` says whether the list has the focus, for
+/// the selected row. Returns where the checkbox is.
+#[allow(clippy::too_many_arguments)]
 fn render_file(
   row: Rect,
   grid: &mut Grid,
@@ -455,8 +574,9 @@ fn render_file(
   bg: Rgb,
   selected: Option<bool>,
   (added_width, removed_width): (u16, u16),
+  hover: Option<(u16, u16)>,
   t: &GitTheme,
-) {
+) -> Rect {
   grid.fill_area(row, ' ', on(bg, t.text));
   let mut line = row;
   let mark = line.take_left(2);
@@ -464,6 +584,18 @@ fn render_file(
     let color = if focused { t.accent } else { t.faint };
     grid.draw_text(mark, "▎", on(bg, color));
   }
+  let check = line.take_left(3);
+  let staged = file.area == Area::Staged;
+  let over = hover.is_some_and(|(x, y)| check.contains(x, y));
+  let color = match (staged, over) {
+    (true, _) => t.add,
+    (false, true) => t.text,
+    (false, false) => t.faint,
+  };
+  let box_text = if staged { "[✓]" } else { "[ ]" };
+  grid.draw_text(check, box_text, on(bg, color));
+  line.take_left(1);
+
   line.take_right(1);
   let removed = line.take_right(removed_width);
   if removed_width > 0 {
@@ -500,6 +632,92 @@ fn render_file(
   line.take_left(2);
   let dir = fit_dir(dir, line.width);
   grid.draw_text(line, &dir, on(bg, t.faint));
+  check
+}
+
+/// The commit: the message's field under its bar, and the buttons.
+/// Returns where the cursor is while the message has the focus.
+fn render_commit(
+  mut area: Rect,
+  grid: &mut Grid,
+  git: &GitView,
+  snapshot: &Snapshot,
+  hits: &mut GitHits,
+  hover: Option<(u16, u16)>,
+  t: &GitTheme,
+) -> Option<Pos> {
+  if area.height == 0 {
+    return None;
+  }
+  let focused = git.focus == GitFocus::Message;
+  let over = |hit: Rect| hover.is_some_and(|(x, y)| hit.contains(x, y));
+  let mut bar = title_bar(grid, area.take_top(1), "COMMIT", focused, t);
+  let amend = if git.amend {
+    "[✓] amend "
+  } else {
+    "[ ] amend "
+  };
+  let amend_at = bar.take_right(amend.width() as u16);
+  let color = match (git.amend, over(amend_at)) {
+    (true, _) | (false, true) => t.text,
+    (false, false) => t.dim,
+  };
+  grid.draw_text(amend_at, amend, on(t.bar, color));
+  hits.amend = Some(amend_at);
+
+  area.take_top(1);
+  // The buttons and what they would commit keep their rows; the field
+  // gets the rest.
+  let below = area.take_bottom(3.min(area.height));
+  let field = area.inner((0, 1, 0, 2));
+  let mut cursor = None;
+  if field.height > 0 && field.width > 3 {
+    grid.fill_area(field, ' ', on(t.bg, t.text));
+    hits.message = Some(field);
+    let text = field.inner((0, 1));
+    if focused {
+      let mark = Rect { width: 1, ..field };
+      grid.fill_area(mark, '▎', on(t.bg, t.accent));
+    }
+    if git.message.is_blank() && !focused {
+      let hint = on(t.bg, t.faint).set_italic(true);
+      grid.draw_text(text, "Commit message", hint);
+    } else {
+      let at = git.message.render(text, grid, on(t.bg, t.text));
+      cursor = focused.then_some(at);
+    }
+  }
+
+  let staged = snapshot
+    .files
+    .iter()
+    .filter(|file| file.area == Area::Staged)
+    .count();
+  let ready = (staged > 0 || git.amend)
+    && !git.message.is_blank()
+    && !git.committing
+    && git.syncing.is_none();
+  let mut rows = below.inner((1, 1, 0, 2));
+  let mut line = rows.take_top(1);
+  let commit = if git.amend { "Amend" } else { "Commit" };
+  hits.commit = button(grid, &mut line, commit, true, ready, hover, t);
+  let and_push =
+    snapshot.has_remote && matches!(snapshot.head, Head::Branch(_));
+  if and_push {
+    let label = format!("{commit} & Push");
+    hits.commit_push = button(grid, &mut line, &label, false, ready, hover, t);
+  }
+  let (said, color) = if git.committing {
+    ("Committing…".to_string(), t.accent)
+  } else if staged == 0 {
+    ("Nothing staged yet".to_string(), t.faint)
+  } else if staged == 1 {
+    ("1 file staged".to_string(), t.dim)
+  } else {
+    (format!("{staged} files staged"), t.dim)
+  };
+  grid.draw_text(rows.take_top(1), &said, on(t.surface, color));
+  cursor
 }
 
 /// The selected change's diff under a bar that names the file.
@@ -700,25 +918,39 @@ fn render_hints(
       .map(|key| key.to_string())
   };
   let mut hints: Vec<(String, &str)> = Vec::new();
-  if let (Some(next), Some(prev)) =
-    (key(&Action::GitNext), key(&Action::GitPrev))
-  {
-    let what = match focus {
-      GitFocus::Files => "select",
-      GitFocus::Diff => "scroll",
-    };
-    hints.push((format!("{next}/{prev}"), what));
-  }
-  for (action, what) in [
-    (Action::ToggleFocus, "focus"),
-    (Action::GitFetch, "fetch"),
-    (Action::ShowTasks, "tasks"),
-    (Action::ShowCommandsMenu, "commands"),
-    (Action::ToggleKeymapWindow, "hide keys"),
-    (Action::ShowQuit, "quit"),
-  ] {
-    if let Some(key) = key(&action) {
-      hints.push((key, what));
+  if focus == GitFocus::Message {
+    // Every other key is typed into the message.
+    for (key, what) in [
+      ("M-Enter", "commit"),
+      ("Enter", "new line"),
+      ("Esc", "back to the changes"),
+    ] {
+      hints.push((key.to_string(), what));
+    }
+  } else {
+    if let (Some(next), Some(prev)) =
+      (key(&Action::GitNext), key(&Action::GitPrev))
+    {
+      let what = match focus {
+        GitFocus::Diff => "scroll",
+        GitFocus::Files | GitFocus::Message => "select",
+      };
+      hints.push((format!("{next}/{prev}"), what));
+    }
+    for (action, what) in [
+      (Action::GitStage, "stage"),
+      (Action::GitFocusMessage, "message"),
+      (Action::GitFetch, "fetch"),
+      (Action::GitPull, "pull"),
+      (Action::GitPush, "push"),
+      (Action::ToggleFocus, "focus"),
+      (Action::ShowTasks, "tasks"),
+      (Action::ToggleKeymapWindow, "hide keys"),
+      (Action::ShowQuit, "quit"),
+    ] {
+      if let Some(key) = key(&action) {
+        hints.push((key, what));
+      }
     }
   }
   let mut line = area.inner((0, 2));
@@ -779,6 +1011,7 @@ mod tests {
       files,
       fetched: Some(SystemTime::UNIX_EPOCH),
       has_remote: true,
+      remote: Some("origin".to_string()),
       doing: None,
     }
   }
@@ -833,7 +1066,11 @@ mod tests {
       snapshot: Some(snapshot(files())),
       diff: Some((key, diff())),
     });
-    let (grid, rows) = drawn(&mut state, 100, 16);
+    state
+      .git
+      .message
+      .set("[DASHBOARD] Melhorias em componentes com IA\n#13193");
+    let (grid, rows) = drawn(&mut state, 100, 26);
     let side: Vec<&str> = rows
       .iter()
       .map(|row| row.split('│').next().unwrap().trim_end())
@@ -845,18 +1082,28 @@ mod tests {
         "",
         "  feat-#13193       fetched 4m ago",
         "  ↑2 to push   ↓3 to pull",
-        "   ↻ Fetch",
+        "   ↻ Fetch   ↓ Pull   ↑ Push",
         "",
         "▎ CHANGES                        4",
         "",
-        "  Staged 1",
-        "▎ M Grid.tsx  …/dashboard  +13  -3",
+        "  Staged 1             unstage all",
+        "▎ [✓] M Grid.tsx           +13  -3",
         "",
-        "  Unstaged 3",
-        "  M Service.java  server    +5  -2",
-        "  D Legacy.tsx  web            -14",
-        "  ? docs/",
-        "  j/k select   C-a focus   f fetch   1 tasks   p commands   ? hide keys   q quit",
+        "  Unstaged 3             stage all",
+        "  [ ] M Service.java        +5  -2",
+        "  [ ] D Legacy.tsx  web        -14",
+        "  [ ] ? docs/",
+        "",
+        "",
+        "  COMMIT                 [ ] amend",
+        "",
+        "   [DASHBOARD] Melhorias em",
+        "   componentes com IA",
+        "   #13193",
+        "",
+        "   Commit   Commit & Push",
+        "  1 file staged",
+        "  j/k select   Space stage   c message   f fetch   p pull   P push   C-a focus   1 tasks",
       ]
     );
     let main: Vec<&str> = rows
@@ -885,7 +1132,25 @@ mod tests {
     let at: Vec<usize> = state.git.hits.rows.iter().map(|r| r.1).collect();
     assert_eq!(at, vec![0, 1, 2, 3]);
     assert_eq!(state.git.hits.rows[0].0, Rect::new(0, 9, 35, 1));
-    assert_eq!(state.git.hits.fetch, Some(Rect::new(2, 4, 9, 1)));
+    let hits = &state.git.hits;
+    assert_eq!(hits.fetch, Some(Rect::new(2, 4, 9, 1)));
+    assert_eq!(hits.pull, Some(Rect::new(12, 4, 8, 1)));
+    assert_eq!(hits.push, Some(Rect::new(21, 4, 8, 1)));
+    assert_eq!(hits.checks[0], (Rect::new(2, 9, 3, 1), 0));
+    assert_eq!(hits.groups[0], (Rect::new(23, 8, 11, 1), Area::Staged));
+    assert_eq!(hits.groups[1].1, Area::Unstaged);
+    assert_eq!(hits.message, Some(Rect::new(2, 19, 32, 3)));
+    assert_eq!(hits.commit, Some(Rect::new(2, 23, 8, 1)));
+    assert_eq!(hits.commit_push, Some(Rect::new(11, 23, 15, 1)));
+    assert_eq!(hits.amend, Some(Rect::new(25, 17, 10, 1)));
+    // What there is to do now is the button that stands out: with
+    // commits to pull, the pull.
+    let theme = Theme::dark();
+    let bg = |col| grid.style_at(Pos { col, row: 4 }).unwrap().bg;
+    assert_eq!(bg(13), theme.git.accent.into());
+    assert_eq!(bg(22), theme.git.chip.into());
+    // No cursor while the message is not being typed.
+    assert_eq!(grid.cursor_pos, None);
   }
 
   #[test]
@@ -953,13 +1218,72 @@ mod tests {
     }
     state.git.scroll = 500;
     let (_, rows) = drawn(&mut state, 100, 14);
-    assert!(rows[12].starts_with("▎ M f29.rs"), "{rows:?}");
+    assert!(rows[12].starts_with("▎ [ ] M f29.rs"), "{rows:?}");
     assert_eq!(state.git.scroll, 0);
     state.git.select(0);
     let (_, rows) = drawn(&mut state, 100, 14);
     assert!(rows[8].starts_with("  Unstaged 30"), "{rows:?}");
-    assert!(rows[9].starts_with("▎ M f00.rs"), "{rows:?}");
-    assert!(rows[12].starts_with("  M f03.rs"), "{rows:?}");
+    assert!(rows[9].starts_with("▎ [ ] M f00.rs"), "{rows:?}");
+    assert!(rows[12].starts_with("  [ ] M f03.rs"), "{rows:?}");
+  }
+
+  /// While the message is typed the cursor is in its field, the hints
+  /// are its keys, and the panel shows even where there is little room.
+  #[test]
+  fn the_message_has_the_cursor_while_it_is_typed() {
+    let mut state = state(Read {
+      snapshot: Some(snapshot(files())),
+      diff: None,
+    });
+    state.git.focus = GitFocus::Message;
+    state.git.message.set("Fix the grid");
+    let (grid, rows) = drawn(&mut state, 100, 16);
+    assert!(rows[7].starts_with("▎ COMMIT"), "{rows:?}");
+    assert!(rows[9].starts_with("  ▎Fix the grid"), "{rows:?}");
+    assert_eq!(grid.cursor_pos, Some(Pos { col: 15, row: 9 }));
+    assert!(
+      rows[15].starts_with("  M-Enter commit   Enter new line   Esc back"),
+      "{rows:?}"
+    );
+  }
+
+  /// The buttons say what can be done: nothing to commit without a
+  /// message, a branch to publish where it has no upstream, and a pull
+  /// or a push under way holds the others.
+  #[test]
+  fn the_buttons_follow_the_state_of_the_repository() {
+    let theme = Theme::dark();
+    let mut unpublished = state(Read {
+      snapshot: Some(Snapshot {
+        upstream: None,
+        ..snapshot(files())
+      }),
+      diff: None,
+    });
+    let (grid, rows) = drawn(&mut unpublished, 100, 26);
+    assert!(rows[3].starts_with("  Not published yet"), "{rows:?}");
+    assert!(rows[4].starts_with("   ↻ Fetch   ↑ Publish"), "{rows:?}");
+    assert_eq!(unpublished.git.hits.pull, None);
+    let bg = |grid: &Grid, col, row| grid.style_at(Pos { col, row }).unwrap();
+    assert_eq!(bg(&grid, 13, 4).bg, theme.git.accent.into());
+    // No message: the commit button is there, and dimmed.
+    assert_eq!(bg(&grid, 4, 23).bg, theme.git.chip.into());
+    assert_eq!(bg(&grid, 4, 23).fg, theme.git.faint.into());
+    assert!(rows[19].contains("Commit message"), "{rows:?}");
+
+    unpublished.git.message.set("Ready");
+    unpublished.git.amend = true;
+    unpublished.git.syncing = Some(crate::console::git_view::Syncing {
+      what: "push",
+      path: "git-push".to_string(),
+      since: std::time::Instant::now(),
+    });
+    let (grid, rows) = drawn(&mut unpublished, 100, 26);
+    assert!(rows[2].trim_end().ends_with("pushing… │"), "{rows:?}");
+    assert!(rows[17].contains("[✓] amend"), "{rows:?}");
+    assert!(rows[23].starts_with("   Amend   Amend & Push"), "{rows:?}");
+    assert_eq!(bg(&grid, 13, 4).fg, theme.git.faint.into(), "held");
+    assert_eq!(bg(&grid, 4, 23).fg, theme.git.faint.into(), "held");
   }
 
   #[test]

@@ -33,21 +33,42 @@ branch with how it stands with its upstream: `↑2 ↓3` is two commits to
 push and three to pull, `✓` is level. `<2>` or a click on the tab or the
 branch shows the git view, and `<1>` goes back to the tasks.
 
-The git view has the branch and the changed files on the left, staged
-and not, each with the lines it adds and removes, and the selected
-file's diff on the right. `<j>` and `<k>` select a file; `<C-a>` or
-`<Tab>` moves the focus to the diff, where the same keys scroll it, as
-do `<C-d>`, `<C-u>`, and the mouse wheel; `<H>` and `<L>` scroll it
-sideways. It keeps up with the repository by itself: a commit, a
-checkout, or a `git add` from anywhere shows at once, and an edit to a
-file within two seconds. It only reads: nothing in it changes the
-working tree or the index.
+The git view has the branch, the changed files, and the commit on the
+left, and the selected file's diff on the right. `<j>` and `<k>` select
+a file; `<C-a>` or `<Tab>` moves the focus to the diff, where the same
+keys scroll it, as do `<C-d>`, `<C-u>`, and the mouse wheel; `<H>` and
+`<L>` scroll it sideways. The view keeps up with the repository by
+itself: a commit, a checkout, or a `git add` from anywhere shows at
+once, and an edit to a file within two seconds.
+
+`<Space>`, or a click on a file's checkbox, stages the file or takes it
+back out of the index, and `<a>` does so for all of them. `<d>` throws
+away a change that is not staged, after asking: it can't be brought
+back. A right click, or `<m>`, opens the file's menu.
+
+`<c>` goes to the commit message, where every key is typed; `<Enter>`
+is a new line, `<M-Enter>` commits what is staged, and `<Esc>` goes
+back to the files. The message is committed as typed, a line that
+starts with `#` included. `<A>` makes the commit amend the last one,
+and brings its message back to change; amending a commit the remote has
+asks first. When a hook refuses the commit, what it said is shown.
+
+`<p>` pulls and `<P>` pushes, or publishes a branch that has no
+upstream; the one there is something to do with stands out. Each runs
+as a task, `git pull` or `git push`, with a terminal of its own, so a
+hook's output is there to read and a password can be typed: `<o>` shows
+that terminal while it runs. The task is removed once it ends well, and
+shown with what it said when it fails. A pull is `git pull`, as your
+git config has it; when the branch and its upstream have each commits
+the other does not and the config does not say how to bring them
+together, the console asks: rebase or merge. A push is not started
+while there is something to pull.
 
 The console also fetches from the remote now and then while someone is
 attached, so that what there is to pull is true; `<f>` fetches now, and
 `tui.git.fetch_every` sets how often, or `off` (|config/user|). A fetch
-never asks for a password: the runner has no terminal to ask on, so one
-that needs it fails, and the branch panel says why.
+never asks for a password: it runs without a terminal, so one that
+needs it fails, and the branch panel says why.
 
 The runner is started if it is not running, with no tasks (|cli/up|
 starts them); `--no-start` fails instead. In the console, `q` asks how

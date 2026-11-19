@@ -535,6 +535,10 @@ impl App {
           if paste_line(&mut bar.input, &text) || selected {
             self.search_changed();
           }
+        } else if self.state.view == View::Git {
+          if self.state.git.focus == GitFocus::Message {
+            self.git_paste(&text);
+          }
         } else if self.state.scope.is_term()
           && let Some(task) = self.state.current_task()
         {
@@ -744,6 +748,12 @@ impl App {
       self.search_key(&key);
       return;
     }
+    // Typed into the commit message, whatever the keymap binds.
+    if self.state.view == View::Git && self.state.git.focus == GitFocus::Message
+    {
+      self.git_message_key(&key);
+      return;
+    }
     let group = self.state.keymap_group();
     if let Some(action) = self.keymap.action(group, &key.plain()) {
       self.handle_action(Some(observer), action.clone());
@@ -809,6 +819,17 @@ impl App {
       Action::GitScrollLeft => self.git_scroll_sideways(false),
       Action::GitScrollRight => self.git_scroll_sideways(true),
       Action::GitFetch => self.git_fetch(true),
+      Action::GitStage => self.git_stage_selected(),
+      Action::GitStageAll => self.git_stage_all(),
+      Action::GitDiscard => self.git_ask_discard(),
+      Action::ShowGitMenu => self.git_menu(None),
+      Action::GitFocusMessage => self.git_focus(GitFocus::Message),
+      Action::GitCommit => self.git_commit(false, false),
+      Action::GitCommitPush => self.git_commit(true, false),
+      Action::GitAmend => self.git_toggle_amend(),
+      Action::GitPull => self.git_pull(),
+      Action::GitPush => self.git_push(false),
+      Action::GitShowSync => self.git_show_sync(),
 
       Action::ShowCommandsMenu => {
         self.open(Box::new(CommandsMenuModal::new()));

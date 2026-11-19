@@ -1,6 +1,7 @@
 pub mod checklist;
 pub mod commands_menu;
 pub mod config_error;
+pub mod git_choice;
 pub mod menu;
 pub mod modal;
 pub mod quit;

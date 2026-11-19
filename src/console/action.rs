@@ -155,6 +155,28 @@ pub enum Action {
   GitScrollRight,
   /// Fetch from the repository's remote now.
   GitFetch,
+  /// Stage the selected change, or take it back out of the index.
+  GitStage,
+  /// Stage every change; with all of them staged, unstage them.
+  GitStageAll,
+  /// Throw the selected change away, after asking.
+  GitDiscard,
+  /// The selected change's menu, also on a right click.
+  ShowGitMenu,
+  /// Type the commit message.
+  GitFocusMessage,
+  /// Commit what is staged, with the message typed.
+  GitCommit,
+  /// Commit, then push.
+  GitCommitPush,
+  /// Make the next commit replace the last one, or not.
+  GitAmend,
+  /// Pull from the branch's upstream, as a task.
+  GitPull,
+  /// Push to the branch's upstream, or publish the branch, as a task.
+  GitPush,
+  /// Show the terminal of the pull or push under way, to type in it.
+  GitShowSync,
 
   SendKey {
     #[serde(with = "key_spec")]
@@ -258,6 +280,17 @@ impl Action {
       Action::GitScrollLeft => "Scroll the diff left".to_string(),
       Action::GitScrollRight => "Scroll the diff right".to_string(),
       Action::GitFetch => "Fetch from the remote".to_string(),
+      Action::GitStage => "Stage or unstage the change".to_string(),
+      Action::GitStageAll => "Stage or unstage every change".to_string(),
+      Action::GitDiscard => "Discard the change".to_string(),
+      Action::ShowGitMenu => "Change menu".to_string(),
+      Action::GitFocusMessage => "Type the commit message".to_string(),
+      Action::GitCommit => "Commit".to_string(),
+      Action::GitCommitPush => "Commit and push".to_string(),
+      Action::GitAmend => "Amend the last commit".to_string(),
+      Action::GitPull => "Pull".to_string(),
+      Action::GitPush => "Push".to_string(),
+      Action::GitShowSync => "Show the pull or push under way".to_string(),
       Action::SendKey { key } => format!("Send {} key", key.spec()),
     }
   }

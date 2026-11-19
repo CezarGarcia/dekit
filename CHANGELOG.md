@@ -11,13 +11,23 @@
   and to pull, the changed files, staged and not, with the lines each
   adds and removes, and the selected file's diff. The header has a tab
   for each view and names the branch in both; `<2>` and `<1>`, or a
-  click, switch. It follows the repository by itself, and only reads it
+  click, switch. It follows the repository by itself
+- In the git view, `<Space>` or a file's checkbox stages and unstages,
+  `<a>` all of them, and `<d>` discards a change after asking. `<c>`
+  goes to the commit message, `<M-Enter>` commits, and `<A>` amends the
+  last commit; a hook that refuses is shown with what it said
+- `<p>` pulls and `<P>` pushes from the git view, each as a task with
+  its own terminal, to read a hook's output or type a password; a pull
+  of two branches that diverged asks how, unless your git config says
 - The console fetches from the remote every `tui.git.fetch_every` (5m,
   or `off`) while someone is attached, and on `<f>` in the git view,
   without ever asking for a password
 - Keymap group `git`, and the actions `show-tasks`, `show-git`,
   `git-next`, `git-prev`, `git-focus-files`, `git-focus-diff`,
-  `git-scroll-left`, `git-scroll-right`, and `git-fetch`
+  `git-scroll-left`, `git-scroll-right`, `git-fetch`, `git-stage`,
+  `git-stage-all`, `git-discard`, `show-git-menu`, `git-focus-message`,
+  `git-commit`, `git-commit-push`, `git-amend`, `git-pull`, `git-push`,
+  and `git-show-sync`
 
 - The console finds text in a task's output: `<C-f>`, or `/` in the task
   list or copy mode, opens a find bar on the terminal. Matches in the

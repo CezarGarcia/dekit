@@ -288,13 +288,6 @@ impl KeymapConfig {
     );
     add(KeyCode::Char('q').into(), Action::ShowQuit);
     add(KeyCode::Char('Q').into(), Action::Down);
-    add(KeyCode::Char('p').into(), Action::ShowCommandsMenu);
-    add(
-      KeyCode::Char('P').into(),
-      Action::ShowRunnerSelect {
-        tab: RunnerTab::Switch,
-      },
-    );
     add(KeyCode::Char('?').into(), Action::ToggleKeymapWindow);
     #[cfg(debug_assertions)]
     add(KeyCode::Char('T').into(), Action::ToggleTheme);
@@ -314,6 +307,15 @@ impl KeymapConfig {
     add(KeyCode::Char('H').into(), Action::GitScrollLeft);
     add(KeyCode::Char('L').into(), Action::GitScrollRight);
     add(KeyCode::Char('f').into(), Action::GitFetch);
+    add(KeyCode::Char('p').into(), Action::GitPull);
+    add(KeyCode::Char('P').into(), Action::GitPush);
+    add(KeyCode::Char('o').into(), Action::GitShowSync);
+    add(KeyCode::Char(' ').into(), Action::GitStage);
+    add(KeyCode::Char('a').into(), Action::GitStageAll);
+    add(KeyCode::Char('d').into(), Action::GitDiscard);
+    add(KeyCode::Char('m').into(), Action::ShowGitMenu);
+    add(KeyCode::Char('c').into(), Action::GitFocusMessage);
+    add(KeyCode::Char('A').into(), Action::GitAmend);
 
     let ctrl = |c: char| Key::new(KeyCode::Char(c), KeyMods::CONTROL);
     let scroll = |up: bool, n: usize, unit: ScrollUnit| {

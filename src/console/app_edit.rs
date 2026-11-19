@@ -189,6 +189,10 @@ impl App {
           }
         });
       }
+      ModalResult::Git(then) => {
+        self.modal = None;
+        self.git_do(then);
+      }
       ModalResult::WriteBack(plan, how) => {
         self.modal = None;
         self.write_back(*plan, how);

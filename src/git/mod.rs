@@ -2,7 +2,9 @@
 //! and how it stands with its upstream, the files changed, and the diff
 //! of one of them. All of it is read by running `git`, so the repository
 //! is seen as the user's own git sees it, with their config and
-//! credentials. Nothing here changes the working tree or the index.
+//! credentials. What changes the repository does it as the user would
+//! at a prompt: `git add`, `git commit`. A pull and a push are not here:
+//! they may need a password, so the console runs them as tasks.
 
 pub mod diff;
 pub mod status;
@@ -18,6 +20,8 @@ pub use status::{Area, FileChange, Head, Kind, Upstream};
 
 /// How long a command that reads the repository may take.
 const LOCAL_LIMIT: Duration = Duration::from_secs(30);
+/// How long a commit may take, with its hooks.
+const COMMIT_LIMIT: Duration = Duration::from_secs(300);
 /// How long a fetch may take.
 const FETCH_LIMIT: Duration = Duration::from_secs(120);
 /// An untracked file larger than this is not read: its lines are not
@@ -49,6 +53,9 @@ pub struct Snapshot {
   /// When the remotes were last fetched from.
   pub fetched: Option<SystemTime>,
   pub has_remote: bool,
+  /// The remote a branch without an upstream is published to: `origin`
+  /// where there is one, else the first.
+  pub remote: Option<String>,
   /// What is under way and not finished: a merge, a rebase.
   pub doing: Option<&'static str>,
 }
@@ -102,6 +109,8 @@ async fn git(dir: &Path, args: &[&str], limit: Duration) -> io::Result<Output> {
     .env("GIT_OPTIONAL_LOCKS", "0")
     .env("GIT_TERMINAL_PROMPT", "0")
     .env("GCM_INTERACTIVE", "never")
+    // A path is the file of that name, whatever characters it has.
+    .env("GIT_LITERAL_PATHSPECS", "1")
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
@@ -320,10 +329,16 @@ pub async fn read(
   let fetched = std::fs::metadata(repo.git_dir.join("FETCH_HEAD"))
     .and_then(|meta| meta.modified())
     .ok();
-  let has_remote = matches!(
-    &remotes,
-    Ok(out) if out.ok && out.stdout.iter().any(|b| !b.is_ascii_whitespace())
-  );
+  let remotes = match &remotes {
+    Ok(out) if out.ok => String::from_utf8_lossy(&out.stdout).into_owned(),
+    Ok(_) | Err(_) => String::new(),
+  };
+  let remote = remotes
+    .lines()
+    .find(|name| *name == "origin")
+    .or_else(|| remotes.lines().find(|name| !name.trim().is_empty()))
+    .map(str::to_string);
+  let has_remote = remote.is_some();
   let doing = doing(&repo);
   Ok(Read {
     snapshot: Some(Snapshot {
@@ -333,6 +348,7 @@ pub async fn read(
       files,
       fetched,
       has_remote,
+      remote,
       doing,
     }),
     diff,
@@ -343,6 +359,122 @@ pub async fn read(
 /// what git said.
 pub async fn fetch(root: &Path) -> Result<(), String> {
   match git(root, &["fetch", "--quiet"], FETCH_LIMIT).await {
+    Ok(out) if out.ok => Ok(()),
+    Ok(out) => Err(reason(&out.stderr)),
+    Err(err) => Err(err.to_string()),
+  }
+}
+
+/// Puts the changes in the index: files changed, deleted, or new, and
+/// conflicts once they are resolved.
+pub async fn stage(root: &Path, files: &[FileChange]) -> Result<(), String> {
+  let mut args = vec!["add", "-A", "--"];
+  args.extend(files.iter().map(|file| file.path.as_str()));
+  done(git(root, &args, LOCAL_LIMIT).await)
+}
+
+/// Takes the changes out of the index; the files stay as they are.
+/// `unborn` is a repository without a commit yet, which has nothing to
+/// reset the index to.
+pub async fn unstage(
+  root: &Path,
+  files: &[FileChange],
+  unborn: bool,
+) -> Result<(), String> {
+  let mut args = if unborn {
+    vec!["rm", "--cached", "-r", "-q", "--"]
+  } else {
+    vec!["reset", "-q", "--"]
+  };
+  for file in files {
+    // Both names of a rename, or the old one stays deleted in the index.
+    args.extend(file.orig.as_deref());
+    args.push(&file.path);
+  }
+  done(git(root, &args, LOCAL_LIMIT).await)
+}
+
+/// Throws away a change that is not staged: the file goes back to what
+/// the index has, and one that is not in the repository is deleted. It
+/// can't be undone.
+pub async fn discard(root: &Path, file: &FileChange) -> Result<(), String> {
+  let args: &[&str] = match (file.area, file.kind) {
+    (Area::Unstaged, Kind::Untracked) => {
+      &["clean", "-f", "-d", "-q", "--", &file.path]
+    }
+    (Area::Unstaged, _) => &["checkout", "-q", "--", &file.path],
+    (Area::Staged | Area::Conflict, _) => {
+      return Err("Only a change that is not staged can be discarded".into());
+    }
+  };
+  done(git(root, args, LOCAL_LIMIT).await)
+}
+
+/// Commits what is staged, or with `amend` replaces the last commit by
+/// one that has it too. The message is taken as typed: a line that
+/// starts with `#` is part of it. Returns the new commit, shortened; the
+/// error is everything git and the hooks said.
+pub async fn commit(
+  root: &Path,
+  message: &str,
+  amend: bool,
+) -> Result<String, String> {
+  let mut args = vec!["commit", "--quiet", "--cleanup=whitespace"];
+  if amend {
+    args.push("--amend");
+  }
+  args.extend(["-m", message]);
+  match git(root, &args, COMMIT_LIMIT).await {
+    Ok(out) if out.ok => (),
+    Ok(out) => {
+      let said =
+        format!("{}\n{}", String::from_utf8_lossy(&out.stdout), out.stderr);
+      let said: Vec<String> = said
+        .lines()
+        .map(diff::clean)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+      return Err(if said.is_empty() {
+        "git commit failed".to_string()
+      } else {
+        said.join("\n")
+      });
+    }
+    Err(err) => return Err(err.to_string()),
+  }
+  let head = git(root, &["rev-parse", "--short", "HEAD"], LOCAL_LIMIT).await;
+  Ok(match head {
+    Ok(out) if out.ok => {
+      String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+    Ok(_) | Err(_) => String::new(),
+  })
+}
+
+/// The last commit's message, to amend it.
+pub async fn last_message(root: &Path) -> Option<String> {
+  let out = git(root, &["log", "-1", "--format=%B"], LOCAL_LIMIT)
+    .await
+    .ok()?;
+  let message = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+  (out.ok && !message.is_empty()).then_some(message)
+}
+
+/// Whether the user's config says how a pull brings two diverged
+/// branches together: by a rebase, a merge, or only fast-forward. Where
+/// it does not, git refuses to pull them.
+pub async fn pull_is_configured(root: &Path) -> bool {
+  for key in ["pull.rebase", "pull.ff"] {
+    let set = git(root, &["config", "--get", key], LOCAL_LIMIT).await;
+    if set.is_ok_and(|out| out.ok && !out.stdout.is_empty()) {
+      return true;
+    }
+  }
+  false
+}
+
+fn done(out: io::Result<Output>) -> Result<(), String> {
+  match out {
     Ok(out) if out.ok => Ok(()),
     Ok(out) => Err(reason(&out.stderr)),
     Err(err) => Err(err.to_string()),
@@ -586,6 +718,200 @@ mod tests {
     assert!(!err.is_empty() && !err.starts_with("fatal:"), "{err}");
     let read = read(&dir.0, None, None).await.unwrap();
     assert!(read.snapshot.unwrap().has_remote);
+  }
+
+  async fn files(dir: &Path) -> Vec<FileChange> {
+    read(dir, None, None).await.unwrap().snapshot.unwrap().files
+  }
+
+  fn listed(files: &[FileChange]) -> Vec<(&str, Area, char)> {
+    files
+      .iter()
+      .map(|f| (f.path.as_str(), f.area, f.kind.letter()))
+      .collect()
+  }
+
+  #[tokio::test]
+  async fn stages_and_unstages_changes() {
+    let dir = repo("git-stage");
+    let root = &dir.0;
+    let all = files(root).await;
+    // What is not staged: a change, a deletion, and a new file.
+    let unstaged: Vec<FileChange> = all
+      .iter()
+      .filter(|f| f.area == Area::Unstaged)
+      .cloned()
+      .collect();
+    stage(root, &unstaged).await.unwrap();
+    let all = files(root).await;
+    assert_eq!(
+      listed(&all),
+      vec![
+        ("a.txt", Area::Staged, 'M'),
+        ("new.txt", Area::Staged, 'A'),
+        ("old.txt", Area::Staged, 'D'),
+      ]
+    );
+    unstage(root, &all[1..], false).await.unwrap();
+    assert_eq!(
+      listed(&files(root).await),
+      vec![
+        ("a.txt", Area::Staged, 'M'),
+        ("old.txt", Area::Unstaged, 'D'),
+        ("new.txt", Area::Unstaged, '?'),
+      ]
+    );
+  }
+
+  /// A file whose name git would read as a pattern is that file only.
+  #[tokio::test]
+  async fn a_path_is_taken_as_it_is() {
+    let dir = repo("git-literal");
+    let root = &dir.0;
+    std::fs::write(root.join("[ab].txt"), "x\n").unwrap();
+    std::fs::write(root.join("b.txt"), "x\n").unwrap();
+    let all = files(root).await;
+    let odd: Vec<FileChange> =
+      all.into_iter().filter(|f| f.path == "[ab].txt").collect();
+    stage(root, &odd).await.unwrap();
+    let staged: Vec<String> = files(root)
+      .await
+      .into_iter()
+      .filter(|f| f.area == Area::Staged && f.kind == Kind::Added)
+      .map(|f| f.path)
+      .collect();
+    assert_eq!(staged, vec!["[ab].txt"]);
+  }
+
+  #[tokio::test]
+  async fn unstages_in_a_repository_without_a_commit() {
+    let dir = TempDir::new("git-unborn");
+    let root = &dir.0;
+    run(root, &["init", "--quiet"]);
+    std::fs::write(root.join("first.txt"), "x\n").unwrap();
+    let all = files(root).await;
+    stage(root, &all).await.unwrap();
+    let all = files(root).await;
+    assert_eq!(listed(&all), vec![("first.txt", Area::Staged, 'A')]);
+    unstage(root, &all, true).await.unwrap();
+    assert_eq!(
+      listed(&files(root).await),
+      vec![("first.txt", Area::Unstaged, '?')]
+    );
+    assert!(root.join("first.txt").exists());
+  }
+
+  #[tokio::test]
+  async fn discards_only_what_is_not_staged() {
+    let dir = repo("git-discard");
+    let root = &dir.0;
+    let all = files(root).await;
+    let find = |path: &str, area: Area| {
+      all
+        .iter()
+        .find(|f| f.path == path && f.area == area)
+        .unwrap()
+        .clone()
+    };
+    // The staged change is refused, and stays.
+    assert!(discard(root, &find("a.txt", Area::Staged)).await.is_err());
+    discard(root, &find("a.txt", Area::Unstaged)).await.unwrap();
+    discard(root, &find("old.txt", Area::Unstaged))
+      .await
+      .unwrap();
+    discard(root, &find("new.txt", Area::Unstaged))
+      .await
+      .unwrap();
+    assert_eq!(
+      listed(&files(root).await),
+      vec![("a.txt", Area::Staged, 'M')]
+    );
+    // The file is as it was staged, and the others are back or gone.
+    let text = |name: &str| std::fs::read_to_string(root.join(name));
+    assert_eq!(text("a.txt").unwrap(), "one\n2\nthree\n");
+    assert_eq!(text("old.txt").unwrap(), "bye\n");
+    assert!(text("new.txt").is_err());
+  }
+
+  /// The message is committed as typed, a `#` line included; an amend
+  /// replaces the commit; and a hook that refuses is heard.
+  #[tokio::test]
+  async fn commits_what_is_staged() {
+    let dir = repo("git-commit");
+    let root = &dir.0;
+    for (key, value) in [("user.name", "Test"), ("user.email", "t@example.com")]
+    {
+      run(root, &["config", key, value]);
+    }
+    run(root, &["config", "commit.gpgsign", "false"]);
+    let message = "[DASHBOARD] Melhorias\n\n#13193";
+    let commit_id = commit(root, message, false).await.unwrap();
+    assert!(commit_id.len() >= 7, "{commit_id}");
+    assert_eq!(last_message(root).await.as_deref(), Some(message));
+    // The unstaged changes are still there.
+    assert_eq!(
+      listed(&files(root).await),
+      vec![
+        ("a.txt", Area::Unstaged, 'M'),
+        ("old.txt", Area::Unstaged, 'D'),
+        ("new.txt", Area::Unstaged, '?'),
+      ]
+    );
+
+    let count = |root: &Path| {
+      let out = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .unwrap();
+      String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(count(root), "2");
+    let amended = commit(root, "Better words", true).await.unwrap();
+    assert_ne!(amended, commit_id);
+    assert_eq!(count(root), "2");
+    assert_eq!(last_message(root).await.as_deref(), Some("Better words"));
+
+    // Nothing staged: git says so.
+    let err = commit(root, "Empty", false).await.unwrap_err();
+    assert!(err.contains("no changes added to commit"), "{err}");
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn a_hook_that_refuses_the_commit_is_heard() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = repo("git-hook");
+    let root = &dir.0;
+    for (key, value) in [("user.name", "Test"), ("user.email", "t@example.com")]
+    {
+      run(root, &["config", key, value]);
+    }
+    let hook = root.join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\necho 'lint: 2 problems' >&2\nexit 1\n")
+      .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+      .unwrap();
+    let err = commit(root, "Refused", false).await.unwrap_err();
+    assert_eq!(err, "lint: 2 problems");
+    assert_eq!(last_message(root).await.as_deref(), Some("first"));
+  }
+
+  #[tokio::test]
+  async fn tells_whether_a_pull_is_configured() {
+    let dir = repo("git-pull-config");
+    let root = &dir.0;
+    // Whatever the machine's own config says, the repository's wins.
+    run(root, &["config", "pull.rebase", "false"]);
+    assert!(pull_is_configured(root).await);
+    let read = read(root, None, None).await.unwrap();
+    assert_eq!(read.snapshot.unwrap().remote, None);
+    run(root, &["remote", "add", "upstream", "./a"]);
+    run(root, &["remote", "add", "origin", "./b"]);
+    let read = super::read(root, None, None).await.unwrap();
+    assert_eq!(read.snapshot.unwrap().remote.as_deref(), Some("origin"));
   }
 
   #[test]

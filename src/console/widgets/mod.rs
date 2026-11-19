@@ -2,6 +2,7 @@ pub mod border;
 pub mod filter_list;
 pub mod form;
 pub mod list;
+pub mod text_area;
 pub mod text_input;
 pub mod wrap;
 
