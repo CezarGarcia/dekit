@@ -19,6 +19,10 @@ jobs:
       cache-prefix: canary
       artifact-prefix: canary
       retention-days: 3
+      # The release waits for every build, and the Apple Silicon one waits
+      # in the queue for a runner here until it is cancelled: with it, a
+      # push to master often published nothing.
+      exclude: aarch64-apple-darwin
 
   publish:
     needs: build

@@ -39,6 +39,8 @@ Windows (PowerShell):
 irm https://github.com/CezarGarcia/dekit/releases/latest/download/install.ps1 | iex
 ```
 
+There is no build for Apple Silicon Macs here.
+
 `dekit update` then updates it from this repository. npm
 (`@dekit/cli`), PyPI (`dekit-cli`), and dekit.run install the original
 dekit, without this fork's changes.

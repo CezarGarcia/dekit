@@ -5,6 +5,8 @@
   push to `master` publishes the `canary` release as the latest. A tag
   makes a GitHub release only; crates.io, npm, and PyPI stay the
   original's
+- The `canary` release has no Apple Silicon build: its job waited for a
+  runner until it was cancelled, and the release with it
 
 - The console has a git view, beside the tasks, when the project is in
   a git repository: the checked-out branch with what there is to push
