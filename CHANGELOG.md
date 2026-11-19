@@ -24,12 +24,23 @@
 - The console fetches from the remote every `tui.git.fetch_every` (5m,
   or `off`) while someone is attached, and on `<f>` in the git view,
   without ever asking for a password
+- A click on the branch's name, or `<b>` in the git view, lists the
+  branches with a filter: `<Enter>` checks one out, a remote's too, and
+  asks what to do with changes that are not committed (take them along,
+  stash them, or discard them); `<Right>` has the rest: merge, rebase,
+  update without checking out, new branch from it, delete. `<n>` makes
+  a new branch
+- A merge and a rebase run as tasks; one that stops at a conflict shows
+  in the git view with the files in conflict, `Abort`, and `Continue`
+- `<s>` stashes every change and `<S>` brings the latest stash back;
+  the git view lists the stash
 - Keymap group `git`, and the actions `show-tasks`, `show-git`,
   `git-next`, `git-prev`, `git-focus-files`, `git-focus-diff`,
   `git-scroll-left`, `git-scroll-right`, `git-fetch`, `git-stage`,
   `git-stage-all`, `git-discard`, `show-git-menu`, `git-focus-message`,
   `git-commit`, `git-commit-push`, `git-amend`, `git-pull`, `git-push`,
-  and `git-show-sync`
+  `git-show-sync`, `show-git-branches`, `show-git-new-branch`,
+  `git-stash`, `git-stash-pop`, `git-abort`, and `git-continue`
 
 - The console finds text in a task's output: `<C-f>`, or `/` in the task
   list or copy mode, opens a find bar on the terminal. Matches in the

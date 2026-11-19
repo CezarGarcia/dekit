@@ -152,10 +152,14 @@ while it has the focus), `<C-a>` `<Tab>` toggle-focus, `<Enter>` `<l>`
 git-scroll-left, `<L>` git-scroll-right, `<Space>` git-stage, `<a>`
 git-stage-all, `<d>` git-discard, `<m>` show-git-menu, `<c>`
 git-focus-message, `<A>` git-amend, `<f>` git-fetch, `<p>` git-pull,
-`<P>` git-push, `<o>` git-show-sync (the terminal of the pull or push
-under way), the same scroll keys for the diff, and `<q>`, `<Q>`, `<?>`
-as in `tasks`. git-commit and git-commit-push have no key: while the
-message is typed every key goes into it, and `<M-Enter>` commits.
+`<P>` git-push, `<o>` git-show-sync (the terminal of the pull, push,
+merge, or rebase under way), `<b>` show-git-branches, `<n>`
+show-git-new-branch, `<s>` git-stash, `<S>` git-stash-pop, the same
+scroll keys for the diff, and `<q>`, `<Q>`, `<?>` as in `tasks`.
+git-commit and git-commit-push have no key: while the message is typed
+every key goes into it, and `<M-Enter>` commits. Nor do git-abort and
+git-continue, for a merge or a rebase that stopped at a conflict: the
+view has a button for each.
 
 `fold` opens, closes, or toggles groups: `{action: fold, op: close}`
 closes the selected group, or the one the selected task is in, and

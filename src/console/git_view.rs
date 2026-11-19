@@ -30,10 +30,11 @@ impl GitFocus {
   }
 }
 
-/// A pull or a push under way, as a task of the runner.
+/// A pull, a push, a merge, or a rebase under way, as a task of the
+/// runner.
 pub struct Syncing {
-  /// `pull` or `push`.
-  pub what: &'static str,
+  /// What it is doing, as it is said while it runs: `pulling`.
+  pub doing: &'static str,
   /// The task's path.
   pub path: String,
   pub since: Instant,
@@ -50,6 +51,67 @@ pub enum GitDo {
     push: bool,
   },
   Pull(PullHow),
+  /// Check a branch out, asking first what to do with changes that are
+  /// not committed. `remote` is a remote's branch, as `origin/x`: it is
+  /// checked out under its own name, following the remote's.
+  Checkout {
+    name: String,
+    remote: bool,
+  },
+  /// Check it out, with the answer.
+  Switch {
+    name: String,
+    remote: bool,
+    changes: Changes,
+  },
+  /// Show what can be done with a branch.
+  BranchMenu {
+    name: String,
+    remote: bool,
+  },
+  /// Ask for a new branch's name; `from` is where it starts, the
+  /// checked-out branch unless it says.
+  NewBranch {
+    from: Option<String>,
+  },
+  CreateBranch {
+    name: String,
+    from: String,
+    switch: bool,
+  },
+  /// Merge the branch into the one checked out.
+  Merge(String),
+  /// Move the checked-out branch's commits on top of the branch.
+  Rebase(String),
+  /// Bring a branch level with its upstream without checking it out.
+  Update {
+    name: String,
+    upstream: String,
+  },
+  /// Delete a local branch; `force` although it has commits that are
+  /// nowhere else.
+  DeleteBranch {
+    name: String,
+    force: bool,
+  },
+  Fetch,
+  /// Bring a stash back.
+  PopStash(usize),
+  /// Throw a stash away.
+  DropStash(usize),
+  /// Give up the merge or rebase that stopped.
+  Abort,
+}
+
+/// What a checkout does with changes that are not committed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Changes {
+  /// They go along to the other branch.
+  Keep,
+  /// They are put in the stash, and stay behind.
+  Stash,
+  /// They are thrown away.
+  Discard,
 }
 
 /// How a pull brings in what the remote has.
@@ -110,9 +172,19 @@ pub struct GitHits {
   pub checks: Vec<(Rect, usize)>,
   /// What stages or unstages a whole group.
   pub groups: Vec<(Rect, Area)>,
+  /// The checked-out branch's name: a click lists the branches.
+  pub branch: Option<Rect>,
   pub fetch: Option<Rect>,
   pub pull: Option<Rect>,
   pub push: Option<Rect>,
+  /// What gives up, and what goes on with, a merge or a rebase that
+  /// stopped.
+  pub abort: Option<Rect>,
+  pub go_on: Option<Rect>,
+  /// What brings each stash back, with its place in the stash.
+  pub stashes: Vec<(Rect, usize)>,
+  /// Each stash's row.
+  pub stash_rows: Vec<(Rect, usize)>,
   /// The commit message's field, and how wide its text is.
   pub message: Option<Rect>,
   pub commit: Option<Rect>,
@@ -288,6 +360,7 @@ mod tests {
       has_remote: false,
       remote: None,
       doing: None,
+      stashes: Vec::new(),
     }
   }
 

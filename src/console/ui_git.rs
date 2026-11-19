@@ -285,28 +285,27 @@ fn render_changes(
   let files = &snapshot.files;
   let focused = git.focus == GitFocus::Files;
   let mut bar = title_bar(grid, area.take_top(1), "CHANGES", focused, t);
-  if files.is_empty() {
-    let mut text = area.inner((1, 2));
+  if !files.is_empty() {
+    let count = format!("{} ", files.len());
     grid.draw_text(
-      text.take_top(1),
-      "✓ Nothing to commit",
-      on(t.surface, t.add),
+      bar.take_right(count.width() as u16),
+      &count,
+      on(t.bar, t.dim),
     );
-    return 0;
   }
-  let count = format!("{} ", files.len());
-  grid.draw_text(
-    bar.take_right(count.width() as u16),
-    &count,
-    on(t.bar, t.dim),
-  );
 
   enum Row {
     Gap,
-    Group(&'static str, usize, Area),
+    /// Nothing changed: said in place of the groups.
+    Clean,
+    Group(&'static str, usize, Option<Area>),
     File(usize),
+    Stash(usize),
   }
   let mut rows = vec![Row::Gap];
+  if files.is_empty() {
+    rows.extend([Row::Clean, Row::Gap]);
+  }
   let mut selected_row = None;
   for (label, area_of) in [
     ("Conflicts", Area::Conflict),
@@ -318,7 +317,7 @@ fn render_changes(
     if count == 0 {
       continue;
     }
-    rows.push(Row::Group(label, count, area_of));
+    rows.push(Row::Group(label, count, Some(area_of)));
     for (at, file) in of_area {
       if git.selected.as_ref() == Some(&file.key()) {
         selected_row = Some(rows.len());
@@ -326,6 +325,11 @@ fn render_changes(
       rows.push(Row::File(at));
     }
     rows.push(Row::Gap);
+  }
+  // What was put aside, under the changes: it is not going anywhere.
+  if !snapshot.stashes.is_empty() {
+    rows.push(Row::Group("Stash", snapshot.stashes.len(), None));
+    rows.extend((0..snapshot.stashes.len()).map(Row::Stash));
   }
   let height = usize::from(area.height);
   let mut top = git.list_top.min(rows.len().saturating_sub(height));
@@ -349,13 +353,34 @@ fn render_changes(
   for (row, line) in rows.iter().skip(top).zip(area.rows()) {
     match row {
       Row::Gap => (),
+      Row::Clean => {
+        let text = line.inner((0, 1, 0, 2));
+        grid.draw_text(text, "✓ Nothing to commit", on(t.surface, t.add));
+      }
+      Row::Stash(index) => {
+        let stash = &snapshot.stashes[*index];
+        hits.stash_rows.push((line, *index));
+        if over(line) {
+          grid.fill_area(line, ' ', on(t.hover, t.text));
+        }
+        let bg = if over(line) { t.hover } else { t.surface };
+        let mut text = line.inner((0, 1, 0, 2));
+        // What brings it back, at the right.
+        let hit = text.take_right(3);
+        let color = if over(hit) { t.text } else { t.dim };
+        grid.draw_text(hit, "pop", on(bg, color).set_underlined(true));
+        hits.stashes.push((hit, *index));
+        text.take_right(2);
+        let message = fit(&stash.message, text.width);
+        grid.draw_text(text, &message, on(bg, t.text));
+      }
       Row::Group(label, count, area_of) => {
         let mut line = line.inner((0, 1, 0, 2));
         // Everything in the group at once, at the right.
         let all = match area_of {
-          Area::Staged => "unstage all",
-          Area::Unstaged => "stage all",
-          Area::Conflict => "",
+          Some(Area::Staged) => "unstage all",
+          Some(Area::Unstaged) => "stage all",
+          Some(Area::Conflict) | None => "",
         };
         if !all.is_empty()
           && all.width() + label.width() + 6 < line.width as usize
@@ -364,11 +389,13 @@ fn render_changes(
           let color = if over(hit) { t.text } else { t.dim };
           let link = on(t.surface, color).set_underlined(true);
           grid.draw_text(hit, all, link);
-          hits.groups.push((hit, *area_of));
+          if let Some(area_of) = area_of {
+            hits.groups.push((hit, *area_of));
+          }
         }
         let color = match area_of {
-          Area::Conflict => t.del,
-          Area::Staged | Area::Unstaged => t.dim,
+          Some(Area::Conflict) => t.del,
+          Some(Area::Staged | Area::Unstaged) | None => t.dim,
         };
         let label_area = line.take_left(label.width() as u16 + 1);
         grid.draw_text(label_area, label, on(t.surface, color).set_bold(true));
@@ -462,7 +489,10 @@ fn render_branch(
   // rest.
   let mut line = area.take_top(1);
   let (remote, color) = if let Some(syncing) = &git.syncing {
-    (format!("{}ing…", syncing.what), t.accent)
+    (format!("{}…", syncing.doing), t.accent)
+  } else if snapshot.doing.is_some() {
+    // What stopped is said after the name, and takes the room.
+    (String::new(), t.faint)
   } else if git.fetching {
     ("fetching…".to_string(), t.accent)
   } else if git.fetch_error.is_some() {
@@ -476,15 +506,19 @@ fn render_branch(
       Some(_) | None => (String::new(), t.faint),
     }
   };
+  // The name opens the list of branches: the mark after it says so.
   let name = head_name(&snapshot.head);
-  if name.width() + remote.width() + 2 <= usize::from(line.width) {
+  if name.width() + remote.width() + 4 <= usize::from(line.width) {
     let at = line.take_right(remote.width() as u16);
     grid.draw_text(at, &remote, paint(color));
     line.take_right(2);
   }
-  let name = fit(&name, line.width);
+  let name = format!("{} ▾", fit(&name, line.width.saturating_sub(2)));
   let name_area = line.take_left(name.width() as u16);
-  grid.draw_text(name_area, &name, paint(t.text).set_bold(true));
+  let over = hover.is_some_and(|(x, y)| name_area.contains(x, y));
+  let name_bg = if over { t.hover } else { t.surface };
+  grid.draw_text(name_area, &name, on(name_bg, t.text).set_bold(true));
+  hits.branch = Some(name_area);
   if let Some(doing) = snapshot.doing {
     line.take_left(2);
     grid.draw_text(line, doing, paint(t.warn));
@@ -527,36 +561,43 @@ fn render_branch(
     }
   }
 
-  if !snapshot.has_remote {
-    return;
-  }
   let mut line = area.take_top(1);
   let idle = git.syncing.is_none();
-  hits.fetch = button(
-    grid,
-    &mut line,
-    "↻ Fetch",
-    false,
-    !git.fetching && idle,
-    hover,
-    t,
-  );
-  if on_branch {
-    let published = snapshot.upstream.as_ref().is_some_and(|up| !up.gone);
-    if published {
-      hits.pull = button(grid, &mut line, "↓ Pull", to_pull, idle, hover, t);
+  // A merge or a rebase that stopped has its own two ways out; the
+  // remote waits until it is over.
+  let stopped = snapshot.doing.filter(|doing| *doing != "bisecting");
+  if let Some(doing) = stopped {
+    hits.abort = button(grid, &mut line, "✕ Abort", false, idle, hover, t);
+    if doing != "merging" {
+      hits.go_on = button(grid, &mut line, "Continue", true, idle, hover, t);
     }
-    let push = if published { "↑ Push" } else { "↑ Publish" };
-    hits.push = button(grid, &mut line, push, to_push, idle, hover, t);
+  } else if snapshot.has_remote {
+    let fetch = !git.fetching && idle;
+    hits.fetch = button(grid, &mut line, "↻ Fetch", false, fetch, hover, t);
+    if on_branch {
+      let published = snapshot.upstream.as_ref().is_some_and(|up| !up.gone);
+      if published {
+        hits.pull = button(grid, &mut line, "↓ Pull", to_pull, idle, hover, t);
+      }
+      let push = if published { "↑ Push" } else { "↑ Publish" };
+      hits.push = button(grid, &mut line, push, to_push, idle, hover, t);
+    }
   }
 
   // Under the buttons: what needs saying about them.
   let line = area.take_top(1);
   if let Some(syncing) = &git.syncing {
     if syncing.since.elapsed() >= SLOW_SYNC {
-      let text = format!("Still {}ing: o shows its terminal", syncing.what);
+      let text = format!("Still {}: o shows its terminal", syncing.doing);
       grid.draw_text(line, &fit(&text, line.width), paint(t.warn));
     }
+  } else if let Some(doing) = stopped {
+    let text = if doing == "merging" {
+      "Resolve, stage, then commit"
+    } else {
+      "Resolve, stage, then continue"
+    };
+    grid.draw_text(line, &fit(text, line.width), paint(t.warn));
   } else if let Some(error) = &git.fetch_error {
     grid.draw_text(line, &fit(error, line.width), paint(t.del));
   }
@@ -940,6 +981,7 @@ fn render_hints(
     for (action, what) in [
       (Action::GitStage, "stage"),
       (Action::GitFocusMessage, "message"),
+      (Action::ShowGitBranches, "branches"),
       (Action::GitFetch, "fetch"),
       (Action::GitPull, "pull"),
       (Action::GitPush, "push"),
@@ -1013,6 +1055,7 @@ mod tests {
       has_remote: true,
       remote: Some("origin".to_string()),
       doing: None,
+      stashes: Vec::new(),
     }
   }
 
@@ -1080,7 +1123,7 @@ mod tests {
       vec![
         "  BRANCH",
         "",
-        "  feat-#13193       fetched 4m ago",
+        "  feat-#13193 ▾     fetched 4m ago",
         "  ↑2 to push   ↓3 to pull",
         "   ↻ Fetch   ↓ Pull   ↑ Push",
         "",
@@ -1103,7 +1146,7 @@ mod tests {
         "",
         "   Commit   Commit & Push",
         "  1 file staged",
-        "  j/k select   Space stage   c message   f fetch   p pull   P push   C-a focus   1 tasks",
+        "  j/k select   Space stage   c message   b branches   f fetch   p pull   P push   C-a focus",
       ]
     );
     let main: Vec<&str> = rows
@@ -1133,6 +1176,7 @@ mod tests {
     assert_eq!(at, vec![0, 1, 2, 3]);
     assert_eq!(state.git.hits.rows[0].0, Rect::new(0, 9, 35, 1));
     let hits = &state.git.hits;
+    assert_eq!(hits.branch, Some(Rect::new(2, 2, 13, 1)));
     assert_eq!(hits.fetch, Some(Rect::new(2, 4, 9, 1)));
     assert_eq!(hits.pull, Some(Rect::new(12, 4, 8, 1)));
     assert_eq!(hits.push, Some(Rect::new(21, 4, 8, 1)));
@@ -1274,7 +1318,7 @@ mod tests {
     unpublished.git.message.set("Ready");
     unpublished.git.amend = true;
     unpublished.git.syncing = Some(crate::console::git_view::Syncing {
-      what: "push",
+      doing: "pushing",
       path: "git-push".to_string(),
       since: std::time::Instant::now(),
     });
@@ -1284,6 +1328,73 @@ mod tests {
     assert!(rows[23].starts_with("   Amend   Amend & Push"), "{rows:?}");
     assert_eq!(bg(&grid, 13, 4).fg, theme.git.faint.into(), "held");
     assert_eq!(bg(&grid, 4, 23).fg, theme.git.faint.into(), "held");
+  }
+
+  /// What is in the stash is listed under the changes, even with
+  /// nothing changed; and a merge that stopped has its two ways out in
+  /// place of the remote's buttons.
+  #[test]
+  fn shows_the_stash_and_a_merge_that_stopped() {
+    let stash = |index: usize, message: &str| crate::git::Stash {
+      index,
+      message: message.to_string(),
+    };
+    let mut stashed = state(Read {
+      snapshot: Some(Snapshot {
+        stashes: vec![
+          stash(0, "On feat-#13193: left behind for develop"),
+          stash(1, "WIP on develop: 3fa92c1 Fix"),
+        ],
+        ..snapshot(Vec::new())
+      }),
+      diff: None,
+    });
+    let (_, rows) = drawn(&mut stashed, 100, 26);
+    assert!(rows[8].starts_with("  ✓ Nothing to commit"), "{rows:?}");
+    assert!(rows[10].starts_with("  Stash 2"), "{rows:?}");
+    assert!(
+      rows[11].starts_with("  On feat-#13193: left behin…"),
+      "{rows:?}"
+    );
+    assert!(rows[11].contains("  pop │"), "{rows:?}");
+    let hits = &stashed.git.hits;
+    assert_eq!(hits.stashes.len(), 2);
+    assert_eq!(hits.stashes[1], (Rect::new(31, 12, 3, 1), 1));
+    assert_eq!(hits.stash_rows[0].0, Rect::new(0, 11, 35, 1));
+
+    let conflict = FileChange {
+      area: Area::Conflict,
+      kind: Kind::Conflict,
+      ..change("web/Grid.tsx", Kind::Conflict, Area::Conflict, 3, 1)
+    };
+    let stopped = |doing: &'static str| {
+      state(Read {
+        snapshot: Some(Snapshot {
+          doing: Some(doing),
+          ..snapshot(vec![conflict.clone()])
+        }),
+        diff: None,
+      })
+    };
+    let mut merging = stopped("merging");
+    let (_, rows) = drawn(&mut merging, 100, 26);
+    assert!(rows[2].starts_with("  feat-#13193 ▾  merging"), "{rows:?}");
+    assert!(rows[4].starts_with("   ✕ Abort "), "{rows:?}");
+    assert!(!rows[4].contains("Fetch"), "{rows:?}");
+    assert!(
+      rows[5].starts_with("  Resolve, stage, then commit"),
+      "{rows:?}"
+    );
+    assert!(rows[8].starts_with("  Conflicts 1"), "{rows:?}");
+    assert!(rows[9].starts_with("▎ [ ] U Grid.tsx"), "{rows:?}");
+    assert!(merging.git.hits.abort.is_some());
+    assert_eq!(merging.git.hits.go_on, None);
+    assert_eq!(merging.git.hits.fetch, None);
+
+    let mut rebasing = stopped("rebasing");
+    let (_, rows) = drawn(&mut rebasing, 100, 26);
+    assert!(rows[4].starts_with("   ✕ Abort   Continue"), "{rows:?}");
+    assert!(rebasing.git.hits.go_on.is_some());
   }
 
   #[test]

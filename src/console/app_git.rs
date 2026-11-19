@@ -18,14 +18,18 @@ use tokio::sync::watch;
 
 use crate::command::{Command, execute};
 use crate::console::action::{Action, ScrollUnit};
-use crate::console::git_view::{GitDo, GitFocus, PullHow, Syncing};
+use crate::console::git_view::{Changes, GitDo, GitFocus, PullHow, Syncing};
 use crate::console::keymap::KeymapGroup;
+use crate::console::modal::git_branches::GitBranches;
 use crate::console::modal::git_choice::{Choice, GitChoice};
+use crate::console::modal::git_new_branch::GitNewBranch;
 use crate::console::modal::menu::{MenuItem, MenuModal};
 use crate::console::state::{Scope, View};
 use crate::console::ui_git::{head_name, sync_mark};
 use crate::console::ui_header::HeaderGit;
-use crate::git::{self, Area, FileChange, Head, Kind, Repo, watch::GitWatch};
+use crate::git::{
+  self, Area, Carry, FileChange, Head, Kind, Repo, branch, watch::GitWatch,
+};
 use crate::spec::TaskSpec;
 use crate::target::Target;
 use crate::task::config_tasks::project_dir;
@@ -90,6 +94,82 @@ enum Op {
     /// Push once it is made.
     push: bool,
   },
+  /// What is done with a branch or the stash, and what is said once it
+  /// is done.
+  Branch(BranchOp, String),
+}
+
+enum BranchOp {
+  Switch {
+    name: String,
+    remote: bool,
+    carry: Carry,
+  },
+  Create {
+    name: String,
+    from: String,
+    switch: bool,
+  },
+  Delete {
+    name: String,
+    force: bool,
+  },
+  Update {
+    name: String,
+    upstream: String,
+  },
+  StashPush(String),
+  StashPop(usize),
+  StashDrop(usize),
+  /// Give up, or go on with, what `Snapshot::doing` names.
+  Abort(&'static str),
+  GoOn(&'static str),
+}
+
+impl BranchOp {
+  /// What its failure is headed with.
+  fn title(&self) -> &'static str {
+    match self {
+      BranchOp::Switch { .. } => "The checkout failed",
+      BranchOp::Create { .. } => "The branch was not made",
+      BranchOp::Delete { .. } => "The branch was not deleted",
+      BranchOp::Update { .. } => "The branch was not updated",
+      BranchOp::StashPush(_) => "The changes were not stashed",
+      BranchOp::StashPop(_) => "The stash did not come back whole",
+      BranchOp::StashDrop(_) => "The stash was not dropped",
+      BranchOp::Abort(_) => "The abort failed",
+      BranchOp::GoOn(_) => "It did not go on",
+    }
+  }
+
+  async fn run(&self, root: &std::path::Path) -> Result<(), String> {
+    match self {
+      BranchOp::Switch {
+        name,
+        remote: false,
+        carry,
+      } => branch::switch(root, name, *carry).await,
+      BranchOp::Switch {
+        name,
+        remote: true,
+        carry,
+      } => branch::switch_to_remote(root, name, *carry).await,
+      BranchOp::Create { name, from, switch } => {
+        branch::create(root, name, from, *switch).await
+      }
+      BranchOp::Delete { name, force } => {
+        branch::delete(root, name, *force).await
+      }
+      BranchOp::Update { name, upstream } => {
+        branch::update(root, name, upstream).await
+      }
+      BranchOp::StashPush(message) => branch::stash_push(root, message).await,
+      BranchOp::StashPop(index) => branch::stash_pop(root, *index).await,
+      BranchOp::StashDrop(index) => branch::stash_drop(root, *index).await,
+      BranchOp::Abort(doing) => branch::abort(root, doing).await,
+      BranchOp::GoOn(doing) => branch::go_on(root, doing).await,
+    }
+  }
 }
 
 /// How an `Op` went.
@@ -100,6 +180,19 @@ enum Done {
     made: Result<String, String>,
     push: bool,
   },
+  Ran {
+    op: BranchOp,
+    said: String,
+    went: Result<(), String>,
+  },
+}
+
+/// A branch's own name: a remote's, `origin/x`, without the remote.
+fn short_name(name: &str, remote: bool) -> &str {
+  match name.split_once('/') {
+    Some((_, short)) if remote => short,
+    Some(_) | None => name,
+  }
 }
 
 fn commits(n: u32) -> String {
@@ -374,7 +467,16 @@ impl App {
           .iter()
           .find(|(area, _)| area.contains(x, y))
           .map(|(_, area)| *area);
-        if on(hits.fetch) {
+        let stash = at(&hits.stashes);
+        if let Some(branch) = hits.branch.filter(|hit| hit.contains(x, y)) {
+          self.git_show_branches(Some(branch));
+        } else if on(hits.abort) {
+          self.git_ask_abort();
+        } else if on(hits.go_on) {
+          self.git_continue();
+        } else if let Some(index) = stash {
+          self.git_pop_stash(index);
+        } else if on(hits.fetch) {
           self.git_fetch(true);
         } else if on(hits.pull) {
           self.git_pull();
@@ -406,7 +508,9 @@ impl App {
         }
       }
       MouseEventKind::Down(MouseButton::Right) => {
-        if let Some(at) = row {
+        if let Some(index) = at(&hits.stash_rows) {
+          self.git_stash_menu(index);
+        } else if let Some(at) = row {
           self.state.git.focus = GitFocus::Files;
           if self.state.git.select(at) {
             self.git.stale = true;
@@ -504,6 +608,10 @@ impl App {
           made: git::commit(&root, &message, amend).await,
           push,
         },
+        Op::Branch(op, said) => {
+          let went = op.run(&root).await;
+          Done::Ran { op, said, went }
+        }
       };
       move |app: &mut App| app.git_op_done(done)
     });
@@ -538,6 +646,37 @@ impl App {
           Err(said) => {
             self.open(Box::new(GitChoice::message("Commit failed", said)));
           }
+        }
+      }
+      Done::Ran {
+        said, went: Ok(()), ..
+      } => {
+        if !said.is_empty() {
+          self.toast(said, false);
+        }
+      }
+      Done::Ran {
+        op, went: Err(err), ..
+      } => {
+        // What was to follow it does not: a checkout after a stash that
+        // failed would carry the changes along.
+        self.git.ops.clear();
+        match op {
+          BranchOp::Delete { name, force: false }
+            if err.contains("not fully merged") =>
+          {
+            let text = format!(
+              "Delete {name}?\nIt has commits that are on no other \
+               branch: nothing would bring them back."
+            );
+            let force = GitDo::DeleteBranch { name, force: true };
+            let options = vec![
+              Choice::new("Delete anyway", "git branch -D", force).danger(),
+              Choice::close("Cancel"),
+            ];
+            self.open(Box::new(GitChoice::new("Delete", text, options, 1)));
+          }
+          op => self.open(Box::new(GitChoice::message(op.title(), err))),
         }
       }
     }
@@ -701,7 +840,370 @@ impl App {
       }
       GitDo::Amend { push } => self.git_commit(push, true),
       GitDo::Pull(how) => self.git_pull_how(how),
+      GitDo::Checkout { name, remote } => self.git_checkout(name, remote),
+      GitDo::Switch {
+        name,
+        remote,
+        changes,
+      } => self.git_switch(name, remote, changes),
+      GitDo::BranchMenu { name, remote } => self.git_branch_menu(name, remote),
+      GitDo::NewBranch { from } => self.git_new_branch(from),
+      GitDo::CreateBranch { name, from, switch } => {
+        let said = if switch {
+          format!("Made {name} from {from}, and checked it out.")
+        } else {
+          format!("Made {name} from {from}.")
+        };
+        self.git_op(Op::Branch(BranchOp::Create { name, from, switch }, said));
+      }
+      GitDo::Merge(name) => {
+        let done = format!("Merged {name} into {}.", self.git_head());
+        let args = ["merge", "--no-edit", name.as_str()];
+        self.git_sync("merge", "merging", &args, done);
+      }
+      GitDo::Rebase(name) => {
+        let done = format!("Rebased {} onto {name}.", self.git_head());
+        let args = ["rebase", "--autostash", name.as_str()];
+        self.git_sync("rebase", "rebasing", &args, done);
+      }
+      GitDo::Update { name, upstream } => {
+        let said = format!("Updated {name} from {upstream}.");
+        self.git_op(Op::Branch(BranchOp::Update { name, upstream }, said));
+      }
+      GitDo::DeleteBranch { name, force } => {
+        let said = format!("Deleted {name}.");
+        self.git_op(Op::Branch(BranchOp::Delete { name, force }, said));
+      }
+      GitDo::Fetch => self.git_fetch(true),
+      GitDo::PopStash(index) => self.git_pop_stash(index),
+      GitDo::DropStash(index) => {
+        let said = "Dropped the stash.".to_string();
+        self.git_op(Op::Branch(BranchOp::StashDrop(index), said));
+      }
+      GitDo::Abort => {
+        if let Some(doing) = self.git_doing() {
+          let said = format!("Gave up {doing}.");
+          self.git_op(Op::Branch(BranchOp::Abort(doing), said));
+        }
+      }
     }
+  }
+
+  /// The checked-out branch, as it is named to the user.
+  fn git_head(&self) -> String {
+    match &self.state.git.snapshot {
+      Some(snapshot) => head_name(&snapshot.head),
+      None => String::new(),
+    }
+  }
+
+  /// The merge or rebase that stopped, if one did.
+  fn git_doing(&self) -> Option<&'static str> {
+    self.state.git.snapshot.as_ref()?.doing
+  }
+
+  /// Lists the branches under `anchor`, or under the branch's name
+  /// where the view shows it, else under the header's.
+  pub(super) fn git_show_branches(&mut self, anchor: Option<Rect>) {
+    let Some(snapshot) = &self.state.git.snapshot else {
+      return self.toast("This project is not in a git repository.", true);
+    };
+    let in_view = match self.state.view {
+      View::Git => self.state.git.hits.branch,
+      View::Tasks => None,
+    };
+    let anchor = anchor
+      .or(in_view)
+      .or(self.state.header.branch)
+      .unwrap_or_default();
+    let root = snapshot.repo.root.clone();
+    let seq = self.modal_seq;
+    self.spawn(async move {
+      let listed = git::branch::branches(&root).await;
+      move |app: &mut App| match listed {
+        Ok(branches) => {
+          let modal = GitBranches::new(anchor, branches);
+          app.open_if_current(seq, Box::new(modal));
+        }
+        Err(err) => app.toast(format!("git: {err}"), true),
+      }
+    });
+  }
+
+  /// Asks for a new branch, starting at `from` or at the one checked
+  /// out unless another is picked.
+  pub(super) fn git_new_branch(&mut self, from: Option<String>) {
+    let Some(snapshot) = &self.state.git.snapshot else {
+      return self.toast("This project is not in a git repository.", true);
+    };
+    let root = snapshot.repo.root.clone();
+    let seq = self.modal_seq;
+    self.spawn(async move {
+      let listed = git::branch::branches(&root).await;
+      move |app: &mut App| {
+        let branches = match listed {
+          Ok(branches) => branches,
+          Err(err) => return app.toast(format!("git: {err}"), true),
+        };
+        // Where it can start: what was asked for, the branch checked
+        // out, then every branch with what it follows on the remote.
+        let mut bases: Vec<String> = from.into_iter().collect();
+        for branch in &branches.local {
+          bases.push(branch.name.clone());
+          let upstream = branch.upstream.as_ref().filter(|up| !up.gone);
+          bases.extend(upstream.map(|up| up.name.clone()));
+        }
+        bases.extend(branches.remote.iter().cloned());
+        let mut seen = std::collections::HashSet::new();
+        bases.retain(|base| seen.insert(base.clone()));
+        if bases.is_empty() {
+          return app.toast("There is no commit to start a branch from.", true);
+        }
+        let taken = branches.local.into_iter().map(|b| b.name).collect();
+        app.open_if_current(seq, Box::new(GitNewBranch::new(bases, taken)));
+      }
+    });
+  }
+
+  /// Checks a branch out; with changes that are not committed, asks
+  /// what becomes of them first.
+  fn git_checkout(&mut self, name: String, remote: bool) {
+    let changes = self.state.git.files().len();
+    if changes == 0 {
+      return self.git_switch(name, remote, Changes::Keep);
+    }
+    let text = if changes == 1 {
+      "You have 1 change that is not committed.\nWhat becomes of it?"
+        .to_string()
+    } else {
+      format!(
+        "You have {changes} changes that are not committed.\nWhat becomes \
+         of them?"
+      )
+    };
+    let to = |changes| GitDo::Switch {
+      name: name.clone(),
+      remote,
+      changes,
+    };
+    let options = vec![
+      Choice::new("Take them along", "git switch", to(Changes::Keep)),
+      Choice::new("Leave them in the stash", "git stash", to(Changes::Stash)),
+      Choice::new(
+        "Discard them",
+        "git switch --discard-changes",
+        to(Changes::Discard),
+      )
+      .danger(),
+      Choice::close("Cancel"),
+    ];
+    let title = format!("Check out {}", short_name(&name, remote));
+    self.open(Box::new(GitChoice::new(&title, text, options, 0)));
+  }
+
+  fn git_switch(&mut self, name: String, remote: bool, changes: Changes) {
+    let short = short_name(&name, remote).to_string();
+    let (carry, said) = match changes {
+      Changes::Keep => (Carry::Keep, format!("Checked out {short}.")),
+      Changes::Stash => {
+        // First: the checkout only follows if this works.
+        let message = format!("left behind for {short}");
+        let stash = BranchOp::StashPush(message);
+        self.git.ops.push_back(Op::Branch(stash, String::new()));
+        let said =
+          format!("Checked out {short}. Your changes are in the stash.");
+        (Carry::Keep, said)
+      }
+      Changes::Discard => (
+        Carry::Discard,
+        format!("Checked out {short}. Your changes were discarded."),
+      ),
+    };
+    let op = BranchOp::Switch {
+      name,
+      remote,
+      carry,
+    };
+    self.git_op(Op::Branch(op, said));
+  }
+
+  /// What can be done with a branch, as it stands by now.
+  fn git_branch_menu(&mut self, name: String, remote: bool) {
+    let Some(snapshot) = &self.state.git.snapshot else {
+      return;
+    };
+    let root = snapshot.repo.root.clone();
+    let head = head_name(&snapshot.head);
+    let seq = self.modal_seq;
+    self.spawn(async move {
+      let listed = git::branch::branches(&root).await;
+      move |app: &mut App| {
+        let branches = listed.unwrap_or_default();
+        let branch = branches.local.iter().find(|b| b.name == name && !remote);
+        let current = branch.is_some_and(|branch| branch.current);
+        let upstream = branch.and_then(|branch| branch.upstream.as_ref());
+        let mut options = Vec::new();
+        if !current {
+          let checkout = GitDo::Checkout {
+            name: name.clone(),
+            remote,
+          };
+          let label = if remote {
+            "Check out as a local branch"
+          } else {
+            "Check out"
+          };
+          options.push(Choice::new(label, "git switch", checkout));
+          options.push(Choice::new(
+            &format!("Merge into {head}"),
+            "git merge",
+            GitDo::Merge(name.clone()),
+          ));
+          options.push(Choice::new(
+            &format!("Rebase {head} onto it"),
+            "git rebase",
+            GitDo::Rebase(name.clone()),
+          ));
+          let behind = upstream.filter(|up| !up.gone && up.behind > 0);
+          if let Some(upstream) = behind {
+            let update = GitDo::Update {
+              name: name.clone(),
+              upstream: upstream.name.clone(),
+            };
+            let label = "Update without checking out";
+            options.push(Choice::new(label, "git fetch", update));
+          }
+        }
+        let from = GitDo::NewBranch {
+          from: Some(name.clone()),
+        };
+        options.push(Choice::new(
+          "New branch from here…",
+          "git switch -c",
+          from,
+        ));
+        if branch.is_some() && !current {
+          let delete = GitDo::DeleteBranch {
+            name: name.clone(),
+            force: false,
+          };
+          options.push(Choice::new("Delete", "git branch -d", delete).danger());
+        }
+        options.push(Choice::close("Cancel"));
+        let text = match (branch, upstream) {
+          (None, _) => "A branch of the remote, with no local one.".to_string(),
+          (Some(_), None) => "A local branch, not published.".to_string(),
+          (Some(_), Some(up)) if up.gone => {
+            format!("{} is gone from the remote.", up.name)
+          }
+          (Some(_), Some(up)) if up.ahead == 0 && up.behind == 0 => {
+            format!("Level with {}.", up.name)
+          }
+          (Some(_), Some(up)) => format!(
+            "{} to push to {}, {} to pull.",
+            commits(up.ahead),
+            up.name,
+            commits(up.behind)
+          ),
+        };
+        let title = if current {
+          format!("{name}, checked out")
+        } else {
+          name.clone()
+        };
+        let modal = GitChoice::new(&title, text, options, 0);
+        app.open_if_current(seq, Box::new(modal));
+      }
+    });
+  }
+
+  /// Puts every change aside in the stash.
+  pub(super) fn git_stash(&mut self) {
+    let changes = self.state.git.files().len();
+    if changes == 0 {
+      return self.toast("There is nothing to stash.", false);
+    }
+    let said = if changes == 1 {
+      "Stashed 1 change.".to_string()
+    } else {
+      format!("Stashed {changes} changes.")
+    };
+    let message = "put aside from the console".to_string();
+    self.git_op(Op::Branch(BranchOp::StashPush(message), said));
+  }
+
+  /// Brings a stash back.
+  pub(super) fn git_pop_stash(&mut self, index: usize) {
+    let stashed = match &self.state.git.snapshot {
+      Some(snapshot) => snapshot.stashes.len(),
+      None => 0,
+    };
+    if index >= stashed {
+      return self.toast("The stash is empty.", false);
+    }
+    let said = "Brought the stash back.".to_string();
+    self.git_op(Op::Branch(BranchOp::StashPop(index), said));
+  }
+
+  /// A stash's own choices: bring it back, or throw it away.
+  fn git_stash_menu(&mut self, index: usize) {
+    let message = self
+      .state
+      .git
+      .snapshot
+      .as_ref()
+      .and_then(|snapshot| snapshot.stashes.get(index))
+      .map(|stash| stash.message.clone());
+    let Some(message) = message else {
+      return;
+    };
+    let options = vec![
+      Choice::new("Bring it back", "git stash pop", GitDo::PopStash(index)),
+      Choice::new("Drop it", "git stash drop", GitDo::DropStash(index))
+        .danger(),
+      Choice::close("Cancel"),
+    ];
+    self.open(Box::new(GitChoice::new("Stash", message, options, 0)));
+  }
+
+  /// Asks before giving up the merge or rebase that stopped.
+  pub(super) fn git_ask_abort(&mut self) {
+    let Some(doing) = self.git_doing() else {
+      return self.toast("No merge or rebase is under way.", false);
+    };
+    let text = format!(
+      "Give up {doing}?\nThe repository goes back to where it was before, \
+       and what was resolved so far is lost."
+    );
+    let options = vec![
+      Choice::new("Give it up", "--abort", GitDo::Abort).danger(),
+      Choice::close("Cancel"),
+    ];
+    self.open(Box::new(GitChoice::new("Abort", text, options, 1)));
+  }
+
+  /// Goes on with a rebase once nothing is left in conflict. A merge is
+  /// finished by committing.
+  pub(super) fn git_continue(&mut self) {
+    let Some(doing) = self.git_doing() else {
+      return self.toast("No merge or rebase is under way.", false);
+    };
+    let conflicts = self
+      .state
+      .git
+      .files()
+      .iter()
+      .any(|file| file.area == Area::Conflict);
+    if conflicts {
+      return self
+        .toast("Resolve the conflicts and stage those files first.", true);
+    }
+    if doing == "merging" {
+      self.state.git.focus = GitFocus::Message;
+      return self.toast("A merge is finished by committing it.", false);
+    }
+    let said = format!("Went on {doing}.");
+    self.git_op(Op::Branch(BranchOp::GoOn(doing), said));
   }
 
   /// Makes the next commit replace the last one, or not. Its message
@@ -872,7 +1374,7 @@ impl App {
       PullHow::Rebase => &["pull", "--rebase", "--autostash"],
       PullHow::Merge => &["pull", "--no-rebase", "--no-edit"],
     };
-    self.git_sync("pull", args, format!("Pulled from {from}."));
+    self.git_sync("pull", "pulling", args, format!("Pulled from {from}."));
   }
 
   /// Pushes to the upstream, or publishes a branch that has none.
@@ -905,12 +1407,13 @@ impl App {
           return self.toast("Nothing to push.", false);
         }
         let done = format!("Pushed to {}.", upstream.name);
-        self.git_sync("push", &["push"], done);
+        self.git_sync("push", "pushing", &["push"], done);
       }
       Some(_) | None => {
         let done = format!("Published {branch} to {remote}.");
         let (remote, branch) = (remote.clone(), branch.clone());
-        self.git_sync("push", &["push", "-u", &remote, &branch], done);
+        let args = ["push", "-u", remote.as_str(), branch.as_str()];
+        self.git_sync("push", "pushing", &args, done);
       }
     }
   }
@@ -918,7 +1421,16 @@ impl App {
   /// Runs `git` with `args` as a task of the runner, at `git-pull` or
   /// `git-push`, and follows it: once it ends well it is removed and
   /// `done` is said; one that fails stays, and is shown.
-  fn git_sync(&mut self, what: &'static str, args: &[&str], done: String) {
+  fn git_sync(
+    &mut self,
+    what: &'static str,
+    doing: &'static str,
+    args: &[&str],
+    done: String,
+  ) {
+    if !self.git_can_sync() {
+      return;
+    }
     let Some(snapshot) = &self.state.git.snapshot else {
       return;
     };
@@ -931,7 +1443,7 @@ impl App {
     spec.set("type", Some("job".into()));
     spec.set("cwd", Some(root.into()));
     self.state.git.syncing = Some(Syncing {
-      what,
+      doing,
       path: path.clone(),
       since: Instant::now(),
     });

@@ -64,6 +64,37 @@ the other does not and the config does not say how to bring them
 together, the console asks: rebase or merge. A push is not started
 while there is something to pull.
 
+A click on the branch's name, in the view or in the header, or `<b>`,
+lists the branches: the local ones, the checked-out one first and then
+the ones committed to last, each with how it stands with its upstream,
+and the remote's that have no local branch yet. Typing filters the
+list. `<Enter>` checks the selected one out; a remote's branch gets a
+local one that follows it. When there are changes that are not
+committed, the console asks what to do with them: take them along,
+which git refuses when the other branch has the same files otherwise,
+leave them in the stash, or discard them. `<Right>`, or a right click,
+opens the branch's menu: merge it into the checked-out branch, rebase
+the checked-out branch onto it, bring it level with its upstream
+without checking it out, make a new branch from it, or delete it. A
+branch with commits that are nowhere else is deleted only after asking
+again.
+
+`<n>` makes a new branch: its name, the branch it starts from, and
+whether to check it out. It follows nothing until it is pushed.
+
+A merge and a rebase run as tasks, `git merge` and `git rebase`, like a
+pull. When one stops at a conflict, the view says what is under way,
+lists the files under `Conflicts`, and has `Abort` in place of the pull
+and push buttons, and `Continue` for a rebase. Resolve the files in
+your editor and stage them; a merge is then finished by committing, and
+a rebase by `Continue`. `Abort` asks first, and puts the repository
+back where it was.
+
+`<s>` puts every change aside in the stash, files that are not in the
+repository included, and `<S>` brings the latest back. The stash is
+listed under the changes: a click on `pop` brings that one back, and a
+right click can also drop it.
+
 The console also fetches from the remote now and then while someone is
 attached, so that what there is to pull is true; `<f>` fetches now, and
 `tui.git.fetch_every` sets how often, or `off` (|config/user|). A fetch

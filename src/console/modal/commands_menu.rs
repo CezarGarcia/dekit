@@ -242,6 +242,12 @@ fn menu_items() -> Vec<MenuItem> {
     Action::GitPull,
     Action::GitPush,
     Action::GitShowSync,
+    Action::ShowGitBranches,
+    Action::ShowGitNewBranch,
+    Action::GitStash,
+    Action::GitStashPop,
+    Action::GitAbort,
+    Action::GitContinue,
   ];
   actions
     .into_iter()

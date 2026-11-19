@@ -6,6 +6,7 @@
 //! at a prompt: `git add`, `git commit`. A pull and a push are not here:
 //! they may need a password, so the console runs them as tasks.
 
+pub mod branch;
 pub mod diff;
 pub mod status;
 pub mod watch;
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime};
 
+pub use branch::{Branch, Branches, Carry, Stash};
 pub use diff::{Diff, DiffLine};
 pub use status::{Area, FileChange, Head, Kind, Upstream};
 
@@ -58,6 +60,8 @@ pub struct Snapshot {
   pub remote: Option<String>,
   /// What is under way and not finished: a merge, a rebase.
   pub doing: Option<&'static str>,
+  /// What `git stash` holds, the latest first.
+  pub stashes: Vec<Stash>,
 }
 
 /// One change of the snapshot.
@@ -109,8 +113,6 @@ async fn git(dir: &Path, args: &[&str], limit: Duration) -> io::Result<Output> {
     .env("GIT_OPTIONAL_LOCKS", "0")
     .env("GIT_TERMINAL_PROMPT", "0")
     .env("GCM_INTERACTIVE", "never")
-    // A path is the file of that name, whatever characters it has.
-    .env("GIT_LITERAL_PATHSPECS", "1")
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
@@ -258,7 +260,7 @@ pub async fn read(
     },
   };
   let root = &repo.root;
-  let (listed, staged, unstaged, remotes) = tokio::join!(
+  let (listed, staged, unstaged, remotes, stashes) = tokio::join!(
     git(
       root,
       &["status", "--porcelain=v2", "--branch", "-z"],
@@ -267,6 +269,7 @@ pub async fn read(
     git(root, &["diff", "--cached", "--numstat", "-z"], LOCAL_LIMIT),
     git(root, &["diff", "--numstat", "-z"], LOCAL_LIMIT),
     git(root, &["remote"], LOCAL_LIMIT),
+    git(root, &["stash", "list", "--format=%gs"], LOCAL_LIMIT),
   );
   let listed = match listed {
     Ok(listed) if listed.ok => listed,
@@ -339,6 +342,12 @@ pub async fn read(
     .or_else(|| remotes.lines().find(|name| !name.trim().is_empty()))
     .map(str::to_string);
   let has_remote = remote.is_some();
+  let stashes = match &stashes {
+    Ok(out) if out.ok => {
+      branch::parse_stashes(&String::from_utf8_lossy(&out.stdout))
+    }
+    Ok(_) | Err(_) => Vec::new(),
+  };
   let doing = doing(&repo);
   Ok(Read {
     snapshot: Some(Snapshot {
@@ -350,6 +359,7 @@ pub async fn read(
       has_remote,
       remote,
       doing,
+      stashes,
     }),
     diff,
   })
@@ -365,11 +375,30 @@ pub async fn fetch(root: &Path) -> Result<(), String> {
   }
 }
 
+/// A path as git takes it for the file of that name and nothing else,
+/// whatever characters it has: `*.txt` is a file, not a pattern.
+fn literal(path: &str) -> String {
+  format!(":(literal){path}")
+}
+
+/// The paths of the changes, for git: both names of a rename, or the old
+/// one is left out of what is done.
+fn paths_of<'a>(
+  files: impl IntoIterator<Item = &'a FileChange>,
+) -> Vec<String> {
+  files
+    .into_iter()
+    .flat_map(|file| file.orig.iter().chain(std::iter::once(&file.path)))
+    .map(|path| literal(path))
+    .collect()
+}
+
 /// Puts the changes in the index: files changed, deleted, or new, and
 /// conflicts once they are resolved.
 pub async fn stage(root: &Path, files: &[FileChange]) -> Result<(), String> {
+  let paths: Vec<String> = files.iter().map(|f| literal(&f.path)).collect();
   let mut args = vec!["add", "-A", "--"];
-  args.extend(files.iter().map(|file| file.path.as_str()));
+  args.extend(paths.iter().map(String::as_str));
   done(git(root, &args, LOCAL_LIMIT).await)
 }
 
@@ -381,16 +410,13 @@ pub async fn unstage(
   files: &[FileChange],
   unborn: bool,
 ) -> Result<(), String> {
+  let paths = paths_of(files);
   let mut args = if unborn {
     vec!["rm", "--cached", "-r", "-q", "--"]
   } else {
     vec!["reset", "-q", "--"]
   };
-  for file in files {
-    // Both names of a rename, or the old one stays deleted in the index.
-    args.extend(file.orig.as_deref());
-    args.push(&file.path);
-  }
+  args.extend(paths.iter().map(String::as_str));
   done(git(root, &args, LOCAL_LIMIT).await)
 }
 
@@ -398,11 +424,12 @@ pub async fn unstage(
 /// the index has, and one that is not in the repository is deleted. It
 /// can't be undone.
 pub async fn discard(root: &Path, file: &FileChange) -> Result<(), String> {
+  let path = literal(&file.path);
   let args: &[&str] = match (file.area, file.kind) {
     (Area::Unstaged, Kind::Untracked) => {
-      &["clean", "-f", "-d", "-q", "--", &file.path]
+      &["clean", "-f", "-d", "-q", "--", &path]
     }
-    (Area::Unstaged, _) => &["checkout", "-q", "--", &file.path],
+    (Area::Unstaged, _) => &["checkout", "-q", "--", &path],
     (Area::Staged | Area::Conflict, _) => {
       return Err("Only a change that is not staged can be discarded".into());
     }
@@ -508,10 +535,8 @@ async fn file_diff(root: &Path, file: &FileChange) -> Diff {
   }
   args.push("--");
   // Both paths of a rename, or it is shown as a file added.
-  if let Some(orig) = &file.orig {
-    args.push(orig);
-  }
-  args.push(&file.path);
+  let paths = paths_of([file]);
+  args.extend(paths.iter().map(String::as_str));
   match git(root, &args, LOCAL_LIMIT).await {
     Ok(out) if out.stdout.len() > MAX_DIFF => {
       Diff::note("The diff is too large to show")
@@ -915,6 +940,173 @@ mod tests {
     run(root, &["remote", "add", "origin", "./b"]);
     let read = super::read(root, None, None).await.unwrap();
     assert_eq!(read.snapshot.unwrap().remote.as_deref(), Some("origin"));
+  }
+
+  fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+      .current_dir(dir)
+      .args(args)
+      .output()
+      .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+  }
+
+  /// `repo`, with what it has left to commit committed, and able to
+  /// commit and stash under a name.
+  fn clean_repo(name: &str) -> TempDir {
+    let dir = repo(name);
+    let root = &dir.0;
+    for (key, value) in [("user.name", "Test"), ("user.email", "t@example.com")]
+    {
+      run(root, &["config", key, value]);
+    }
+    run(root, &["config", "commit.gpgsign", "false"]);
+    run(root, &["add", "-A"]);
+    run(root, &["commit", "--quiet", "-m", "second"]);
+    dir
+  }
+
+  #[tokio::test]
+  async fn makes_switches_and_deletes_branches() {
+    let dir = clean_repo("git-branches");
+    let root = &dir.0;
+    branch::create(root, "feat-a", "main", true).await.unwrap();
+    branch::create(root, "feat-b", "main", false).await.unwrap();
+    assert_eq!(git_out(root, &["branch", "--show-current"]), "feat-a");
+    let listed = branch::branches(root).await.unwrap();
+    assert_eq!(listed.local[0].name, "feat-a");
+    assert!(listed.local[0].current);
+    assert_eq!(listed.local.len(), 3);
+    assert!(listed.remote.is_empty());
+
+    // A change that is not committed goes along.
+    std::fs::write(root.join("a.txt"), "edited\n").unwrap();
+    branch::switch(root, "feat-b", Carry::Keep).await.unwrap();
+    assert_eq!(git_out(root, &["branch", "--show-current"]), "feat-b");
+    assert_eq!(git_out(root, &["status", "--short"]), "M a.txt");
+    branch::switch(root, "main", Carry::Discard).await.unwrap();
+    assert_eq!(git_out(root, &["status", "--short"]), "");
+
+    // A name that is taken is refused, with what git said.
+    let err = branch::create(root, "feat-a", "main", false)
+      .await
+      .unwrap_err();
+    assert!(err.contains("already exists"), "{err}");
+    // A branch with a commit of its own is deleted only by force.
+    branch::switch(root, "feat-a", Carry::Keep).await.unwrap();
+    std::fs::write(root.join("only-here.txt"), "x\n").unwrap();
+    run(root, &["add", "-A"]);
+    run(root, &["commit", "--quiet", "-m", "only on feat-a"]);
+    branch::switch(root, "main", Carry::Keep).await.unwrap();
+    let err = branch::delete(root, "feat-a", false).await.unwrap_err();
+    assert!(err.contains("not fully merged"), "{err}");
+    branch::delete(root, "feat-a", true).await.unwrap();
+    branch::delete(root, "feat-b", false).await.unwrap();
+    assert_eq!(branch::branches(root).await.unwrap().local.len(), 1);
+  }
+
+  /// A switch that would overwrite a change is refused, and says which
+  /// file is in the way.
+  #[tokio::test]
+  async fn a_switch_over_a_change_names_the_file() {
+    let dir = clean_repo("git-switch-refused");
+    let root = &dir.0;
+    branch::create(root, "other", "main", true).await.unwrap();
+    std::fs::write(root.join("a.txt"), "theirs\n").unwrap();
+    run(root, &["commit", "--quiet", "-am", "theirs"]);
+    branch::switch(root, "main", Carry::Keep).await.unwrap();
+    std::fs::write(root.join("a.txt"), "mine\n").unwrap();
+    let err = branch::switch(root, "other", Carry::Keep)
+      .await
+      .unwrap_err();
+    assert!(err.contains("a.txt"), "{err}");
+    assert_eq!(git_out(root, &["branch", "--show-current"]), "main");
+  }
+
+  #[tokio::test]
+  async fn stashes_and_brings_back() {
+    let dir = clean_repo("git-stash");
+    let root = &dir.0;
+    std::fs::write(root.join("a.txt"), "edited\n").unwrap();
+    std::fs::write(root.join("brand-new.txt"), "x\n").unwrap();
+    branch::stash_push(root, "left by dekit").await.unwrap();
+    assert_eq!(git_out(root, &["status", "--short"]), "");
+    let snapshot = read(root, None, None).await.unwrap().snapshot.unwrap();
+    assert_eq!(
+      snapshot.stashes,
+      vec![Stash {
+        index: 0,
+        message: "On main: left by dekit".to_string()
+      }]
+    );
+    branch::stash_pop(root, 0).await.unwrap();
+    let changed = git_out(root, &["status", "--short"]);
+    assert!(changed.contains("a.txt") && changed.contains("brand-new.txt"));
+    branch::stash_push(root, "again").await.unwrap();
+    branch::stash_drop(root, 0).await.unwrap();
+    let snapshot = read(root, None, None).await.unwrap().snapshot.unwrap();
+    assert!(snapshot.stashes.is_empty());
+    assert!(snapshot.files.is_empty());
+  }
+
+  /// A remote's branch is checked out under its own name, following it;
+  /// a branch behind its upstream is brought level without a checkout;
+  /// and a merge that stops on a conflict is given up.
+  #[tokio::test]
+  async fn follows_a_remote_and_gives_up_a_merge() {
+    let dir = clean_repo("git-remote");
+    let root = &dir.0;
+    let remote = TempDir::new("git-remote-bare");
+    run(&remote.0, &["init", "--quiet", "--bare"]);
+    let url = remote.0.to_string_lossy().into_owned();
+    run(root, &["remote", "add", "origin", &url]);
+    run(root, &["push", "--quiet", "-u", "origin", "main"]);
+    run(root, &["push", "--quiet", "origin", "main:theirs"]);
+    run(root, &["fetch", "--quiet"]);
+
+    let listed = branch::branches(root).await.unwrap();
+    assert_eq!(listed.remote, vec!["origin/theirs"]);
+    branch::switch_to_remote(root, "origin/theirs", Carry::Keep)
+      .await
+      .unwrap();
+    assert_eq!(git_out(root, &["branch", "--show-current"]), "theirs");
+    let listed = branch::branches(root).await.unwrap();
+    assert!(listed.remote.is_empty());
+    let upstream = listed.local[0].upstream.clone().unwrap();
+    assert_eq!(upstream.name, "origin/theirs");
+
+    // The remote's main moves on; ours follows without being checked out.
+    std::fs::write(root.join("a.txt"), "on theirs\n").unwrap();
+    run(root, &["commit", "--quiet", "-am", "on theirs"]);
+    run(root, &["push", "--quiet", "origin", "theirs:main"]);
+    let before = git_out(root, &["rev-parse", "main"]);
+    branch::update(root, "main", "origin/main").await.unwrap();
+    assert_ne!(git_out(root, &["rev-parse", "main"]), before);
+    assert_eq!(
+      git_out(root, &["rev-parse", "main"]),
+      git_out(root, &["rev-parse", "theirs"])
+    );
+
+    // Two branches change the same line: the merge stops, and is aborted.
+    branch::create(root, "left", "main", true).await.unwrap();
+    std::fs::write(root.join("a.txt"), "left\n").unwrap();
+    run(root, &["commit", "--quiet", "-am", "left"]);
+    branch::switch(root, "main", Carry::Keep).await.unwrap();
+    std::fs::write(root.join("a.txt"), "right\n").unwrap();
+    run(root, &["commit", "--quiet", "-am", "right"]);
+    let merged = std::process::Command::new("git")
+      .current_dir(root)
+      .args(["merge", "--no-edit", "left"])
+      .output()
+      .unwrap();
+    assert!(!merged.status.success());
+    let snapshot = read(root, None, None).await.unwrap().snapshot.unwrap();
+    assert_eq!(snapshot.doing, Some("merging"));
+    assert_eq!(snapshot.files[0].area, Area::Conflict);
+    branch::abort(root, "merging").await.unwrap();
+    let snapshot = read(root, None, None).await.unwrap().snapshot.unwrap();
+    assert_eq!(snapshot.doing, None);
+    assert!(snapshot.files.is_empty());
   }
 
   #[test]

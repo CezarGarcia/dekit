@@ -316,6 +316,10 @@ impl KeymapConfig {
     add(KeyCode::Char('m').into(), Action::ShowGitMenu);
     add(KeyCode::Char('c').into(), Action::GitFocusMessage);
     add(KeyCode::Char('A').into(), Action::GitAmend);
+    add(KeyCode::Char('b').into(), Action::ShowGitBranches);
+    add(KeyCode::Char('n').into(), Action::ShowGitNewBranch);
+    add(KeyCode::Char('s').into(), Action::GitStash);
+    add(KeyCode::Char('S').into(), Action::GitStashPop);
 
     let ctrl = |c: char| Key::new(KeyCode::Char(c), KeyMods::CONTROL);
     let scroll = |up: bool, n: usize, unit: ScrollUnit| {

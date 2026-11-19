@@ -671,8 +671,11 @@ impl App {
         let on = |hit: Option<Rect>| hit.is_some_and(|hit| hit.contains(x, y));
         if on(hits.tasks) {
           self.handle_action(Some(observer), Action::ShowTasks);
-        } else if on(hits.git) || on(hits.branch) {
+        } else if on(hits.git) {
           self.handle_action(Some(observer), Action::ShowGit);
+        } else if on(hits.branch) {
+          // The branches hang under the name that was clicked.
+          self.git_show_branches(hits.branch);
         } else if hits.logo.is_some_and(|hit| hit.contains(x, y)) {
           self.handle_action(Some(observer), Action::ShowMainMenu);
         } else if hits.reload.is_some_and(|hit| hit.contains(x, y)) {
@@ -830,6 +833,12 @@ impl App {
       Action::GitPull => self.git_pull(),
       Action::GitPush => self.git_push(false),
       Action::GitShowSync => self.git_show_sync(),
+      Action::ShowGitBranches => self.git_show_branches(None),
+      Action::ShowGitNewBranch => self.git_new_branch(None),
+      Action::GitStash => self.git_stash(),
+      Action::GitStashPop => self.git_pop_stash(0),
+      Action::GitAbort => self.git_ask_abort(),
+      Action::GitContinue => self.git_continue(),
 
       Action::ShowCommandsMenu => {
         self.open(Box::new(CommandsMenuModal::new()));

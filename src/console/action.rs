@@ -177,6 +177,18 @@ pub enum Action {
   GitPush,
   /// Show the terminal of the pull or push under way, to type in it.
   GitShowSync,
+  /// The repository's branches, to check one out or do more with it.
+  ShowGitBranches,
+  /// Ask for a new branch's name and where it starts.
+  ShowGitNewBranch,
+  /// Put every change aside in the stash.
+  GitStash,
+  /// Bring the latest stash back.
+  GitStashPop,
+  /// Give up the merge or rebase that stopped, after asking.
+  GitAbort,
+  /// Go on with a rebase once its conflicts are resolved and staged.
+  GitContinue,
 
   SendKey {
     #[serde(with = "key_spec")]
@@ -291,6 +303,12 @@ impl Action {
       Action::GitPull => "Pull".to_string(),
       Action::GitPush => "Push".to_string(),
       Action::GitShowSync => "Show the pull or push under way".to_string(),
+      Action::ShowGitBranches => "Branches".to_string(),
+      Action::ShowGitNewBranch => "New branch".to_string(),
+      Action::GitStash => "Stash the changes".to_string(),
+      Action::GitStashPop => "Bring the latest stash back".to_string(),
+      Action::GitAbort => "Abort the merge or rebase".to_string(),
+      Action::GitContinue => "Continue the rebase".to_string(),
       Action::SendKey { key } => format!("Send {} key", key.spec()),
     }
   }
